@@ -1,0 +1,119 @@
+import type { NextRequest } from "next/server";
+import { NextResponse } from "next/server";
+
+import { allowEdgeRateLimit } from "@/lib/api/edge-rate-limit";
+import { ApiError, fetchApiJson } from "@/lib/api/http";
+import { normalizeProfiles } from "@/lib/api/normalize";
+import { hydrateProfiles } from "@/lib/api/profile-hydration";
+import {
+  clampSuggestLimit,
+  clampSuggestQuery,
+  clientIpFromRequest,
+  forwardableClientIp,
+} from "@/lib/api/search-suggest-params";
+import {
+  searchSuggestResponseSchema,
+  type SearchSuggestResponseSchema,
+} from "@/lib/api/schemas/core";
+import { nativeApiV1Routes } from "@/lib/api/endpoints/shared";
+import type { Profile } from "@/lib/types/api";
+
+const PICTURE_HYDRATION_BUDGET_MS = 1_200;
+
+async function profilesWithPictures(profiles: Profile[]): Promise<Profile[]> {
+  if (profiles.length === 0) return profiles;
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(profiles), PICTURE_HYDRATION_BUDGET_MS);
+    hydrateProfiles(profiles)
+      .then((hydrated) => {
+        clearTimeout(timer);
+        resolve(hydrated);
+      })
+      .catch(() => {
+        clearTimeout(timer);
+        resolve(profiles);
+      });
+  });
+}
+
+export async function GET(request: NextRequest) {
+  const q = clampSuggestQuery(request.nextUrl.searchParams.get("q") ?? "");
+  const limit = clampSuggestLimit(request.nextUrl.searchParams.get("limit"));
+  if (q.length < 2) {
+    return NextResponse.json({ profiles: [], hashtags: [] });
+  }
+
+  const clientIp = clientIpFromRequest(request.headers);
+  // Only echo an address Cloudflare already attested. A synthesized loopback
+  // or "unknown" value makes the upstream reject the suggest call.
+  const forwardedIp = forwardableClientIp(request.headers.get("cf-connecting-ip") ?? "");
+  const allowed = await allowEdgeRateLimit(clientIp);
+  if (!allowed) {
+    return NextResponse.json(
+      { profiles: [], hashtags: [], error: { code: "rate_limited", message: "Too many requests" } },
+      { status: 429, headers: { "Retry-After": "60" } }
+    );
+  }
+
+  try {
+    const suggested = await fetchApiJson<SearchSuggestResponseSchema>(
+      nativeApiV1Routes.searchSuggest,
+      {
+        // Typed-in autocomplete text is effectively unbounded, so durable R2
+        // caching here buys almost no hit rate while paying a write per
+        // keystroke; the response's own Cache-Control below already covers
+        // short-lived client/edge reuse.
+        cacheClass: "requestTime",
+        timeoutMs: 5_000,
+        query: { q, limit },
+        schema: searchSuggestResponseSchema,
+        init: forwardedIp
+          ? {
+              headers: {
+                "X-Forwarded-For": forwardedIp,
+                "CF-Connecting-IP": forwardedIp,
+              },
+            }
+          : undefined,
+      }
+    );
+
+    const rawProfiles = suggested.profiles ?? suggested.suggested_profiles;
+    const profiles = await profilesWithPictures(normalizeProfiles(rawProfiles));
+    const body = profiles.length > 0 ? { ...suggested, profiles } : suggested;
+
+    return NextResponse.json(body, {
+      headers: { "Cache-Control": "public, max-age=10, stale-while-revalidate=20" },
+    });
+  } catch (error) {
+    if (error instanceof ApiError) {
+      if (error.isRateLimited) {
+        return NextResponse.json(
+          {
+            profiles: [],
+            hashtags: [],
+            error: {
+              code: error.code ?? "rate_limited",
+              message: "Upstream rate limited",
+              request_id: error.requestId,
+            },
+          },
+          { status: 429, headers: { "Retry-After": "60" } }
+        );
+      }
+      return NextResponse.json(
+        {
+          profiles: [],
+          hashtags: [],
+          error: {
+            code: error.code ?? "upstream_error",
+            message: "Suggest upstream failed",
+            request_id: error.requestId,
+          },
+        },
+        { status: error.status >= 400 && error.status < 600 ? error.status : 502 }
+      );
+    }
+    return NextResponse.json({ profiles: [], hashtags: [] }, { status: 502 });
+  }
+}

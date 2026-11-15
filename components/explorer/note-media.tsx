@@ -1,0 +1,95 @@
+import { NoteMediaReveal } from "@/components/explorer/note-media-reveal";
+import { extractNoteMediaAttachments, type NoteMediaAttachment } from "@/lib/notes/media";
+import { extractImetaAttachments } from "@/lib/notes/media-event";
+
+function collectAttachments(content: string, tags?: unknown): NoteMediaAttachment[] {
+  const fromContent = extractNoteMediaAttachments(content);
+  if (tags === undefined) return fromContent;
+  const seen = new Set(fromContent.map((item) => item.url));
+  const merged = [...fromContent];
+  for (const extra of extractImetaAttachments(tags)) {
+    const existing = merged.find((item) => item.url === extra.url);
+    if (!existing) {
+      seen.add(extra.url);
+      merged.push(extra);
+      continue;
+    }
+    if (!existing.poster && extra.poster) existing.poster = extra.poster;
+    if (!existing.alt && extra.alt) existing.alt = extra.alt;
+  }
+  return merged.slice(0, Math.max(4, fromContent.length));
+}
+
+/**
+ * - `full`: every attachment at its own aspect ratio, capped so a tall image can still be enlarged.
+ * - `detail`: the focal note. Same shape as full, with room for a phone photo to stay readable.
+ * - `thread`: a reply. At most two attachments, each at conversation height.
+ * - `lead`: max two attachments side by side in fixed boxes (homepage lead;
+ *   no CLS, and the card never grows by more than one image's height).
+ * - `compact`: one attachment with a `+N` badge, always a square thumbnail.
+ * - `feed`: profile activity. One attachment, letterboxed, large enough to read.
+ */
+export type NoteMediaVariant = "full" | "lead" | "compact" | "feed" | "detail" | "thread";
+
+export function NoteMedia({
+  content,
+  tags,
+  variant = "full",
+  maxAttachments,
+  priority = false,
+}: {
+  content: string;
+  /** NIP-92 imeta rows, for a file that is not repeated in the text. */
+  tags?: unknown;
+  variant?: NoteMediaVariant;
+  /** Cap on rendered attachments; defaults to 1 (`compact`), 2 (`lead`), unlimited (`full`). */
+  maxAttachments?: number;
+  /** Eager-load the first image (LCP candidate). */
+  priority?: boolean;
+}) {
+  const attachments = collectAttachments(content, tags);
+
+  if (attachments.length === 0) {
+    return null;
+  }
+
+  const defaultLimit =
+    variant === "compact" || variant === "feed"
+      ? 1
+      : variant === "lead" || variant === "thread"
+        ? 2
+        : attachments.length;
+  const limit = maxAttachments ?? defaultLimit;
+  const visible = attachments.slice(0, Math.max(1, limit));
+  const hidden = attachments.length - visible.length;
+
+  const wrapperClassName =
+    variant === "compact"
+      ? "w-[5.5rem] max-w-full min-w-0"
+      : variant === "feed"
+        ? "mt-3 w-full max-w-xl"
+        : variant === "lead"
+          ? // Two lead images share a row instead of stacking.
+            `mt-4 grid gap-3 ${visible.length > 1 ? "grid-cols-2" : "grid-cols-1"}`
+          : variant === "thread"
+            ? // Reply images stay in the conversation: at most two, side by side.
+              `mt-2 grid gap-2 ${visible.length > 1 ? "grid-cols-2" : "grid-cols-1"}`
+            : "mt-3 space-y-3";
+
+  return (
+    <div className={wrapperClassName}>
+      {visible.map((attachment, index) => (
+        <NoteMediaReveal
+          key={attachment.url}
+          url={attachment.url}
+          kind={attachment.kind}
+          variant={variant}
+          priority={priority && index === 0}
+          hiddenCount={index === visible.length - 1 ? hidden : 0}
+          alt={attachment.alt}
+          poster={attachment.poster}
+        />
+      ))}
+    </div>
+  );
+}

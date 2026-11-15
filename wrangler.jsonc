@@ -1,0 +1,51 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "build": {
+    "command": "pnpm run cf:build",
+    "cwd": ".",
+  },
+  "main": "cloudflare/worker.ts",
+  "name": "nostrmash-web",
+  // Cache hits for the paths in lib/caching/public-edge-cache.ts are served
+  // before this Worker runs. Other responses stay private and are not stored.
+  "cache": {
+    "enabled": true,
+  },
+  "compatibility_date": "2026-04-09",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "vars": {
+    "NEXT_PUBLIC_SITE_URL": "https://nostrmash.com",
+    "NOSTRMASH_API_BASE_URL": "https://api.nostrmash.com",
+    // Set NEXT_PUBLIC_SENTRY_DSN in the Cloudflare dashboard / via wrangler secret when ready.
+  },
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS",
+  },
+  "services": [
+    {
+      "binding": "WORKER_SELF_REFERENCE",
+      "service": "nostrmash-web",
+    },
+  ],
+  "r2_buckets": [
+    {
+      "binding": "NEXT_INC_CACHE_R2_BUCKET",
+      "bucket_name": "nostrmash-web-opennext-cache",
+    },
+  ],
+  "images": {
+    "binding": "IMAGES",
+  },
+  "ratelimits": [
+    {
+      "name": "SUGGEST_RATE_LIMITER",
+      // Unique per Cloudflare account; integer encoded as string.
+      "namespace_id": "1001",
+      "simple": {
+        "limit": 60,
+        "period": 60,
+      },
+    },
+  ],
+}

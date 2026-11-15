@@ -1,0 +1,540 @@
+import {
+  getDiscoveryArchiveDays,
+  getDiscoveryHome,
+  getNetworkStats,
+  getRelayCoverageChanges,
+  getRelayStats,
+  getRisingProfiles,
+  getStatsSeries,
+  getTrendingDomains,
+  getTrendingHashtags,
+  getTrendingNotes,
+  getTrendingProfiles,
+  normalizeSeriesPoints,
+} from "@/lib/api/endpoints";
+import type { SeriesPoint } from "@/components/charts/sparkline";
+import { isApiError, isApiTimeoutError } from "@/lib/api/http";
+import { normalizeTopLanguages } from "@/lib/api/normalize";
+import { fetchProfilesByPubkey, mergeHydratedProfile } from "@/lib/api/profile-hydration";
+import { extractRelayRows, pickTopPrimitiveStats } from "@/components/explorer/stats-utils";
+import { isRecord } from "@/components/explorer/utils";
+import { summarizeLoadErrors, toUserFacingErrorMessage } from "@/lib/errors/user-message";
+import { readLanguage } from "@/lib/search-params/language";
+import { toUrlSearchParams } from "@/lib/search-params/pagination";
+import {
+  lastDiscoveryWindow,
+  unsupportedDiscoveryWindowHref,
+} from "@/lib/discover/window-fallback";
+import {
+  NETWORK_PULSE_TILE_LIMIT,
+  buildWindowHref,
+  fallbackAfterRejected30d,
+  networkPulsePreferredKeys,
+  readStatsWindow,
+  relayStatsWindow,
+  type StatsWindow,
+} from "@/lib/search-params/window";
+import { loadHomeMediaLeaders, type MediaLeaders } from "@/lib/discover/media-rankings";
+import { EMPTY_HOME_RAILS, loadHomeRails, type HomeRails } from "@/lib/home/load-home-rails";
+import { latestArchiveDay } from "@/lib/discover/archive";
+import { readEntityBaseline } from "@/lib/discover/baseline";
+import { readPersonalization, viewerCohortDegraded } from "@/lib/discover/personalization";
+import { languageScopedStatLabel } from "@/lib/home/pulse-labels";
+import { readViewer } from "@/lib/search-params/viewer";
+import { traceHomeFanOut } from "@/lib/telemetry/trace";
+import type { CoverageNote } from "@/lib/stats/coverage-notes";
+import type {
+  DomainEntry,
+  EntityBaseline,
+  EventRecord,
+  HashtagEntry,
+  Personalization,
+  Profile,
+  TopLanguages,
+} from "@/lib/types/api";
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return isRecord(value) ? value : null;
+}
+
+function hasRichIdentity(profile: Profile | undefined): boolean {
+  if (!profile) return false;
+  const displayName = typeof profile.display_name === "string" ? profile.display_name.trim() : "";
+  const name = typeof profile.name === "string" ? profile.name.trim() : "";
+  const picture = typeof profile.picture === "string" ? profile.picture.trim() : "";
+  return displayName.length > 0 || name.length > 0 || picture.length > 0;
+}
+
+type PulseStat = {
+  label: string;
+  value: string | number | boolean;
+  series?: SeriesPoint[];
+  baseline?: EntityBaseline | null;
+};
+
+function baselineFromSeries(
+  result: PromiseSettledResult<Awaited<ReturnType<typeof getStatsSeries>> | undefined>
+): EntityBaseline | null {
+  if (result.status !== "fulfilled" || !result.value) return null;
+  return readEntityBaseline(result.value.baseline);
+}
+
+/**
+ * Pair Pulse tiles with their history series and keep the strip honest: once
+ * any tile has a trend, tiles without one are dropped rather than rendered
+ * with a "No trend yet" placeholder (a half-empty strip reads weaker than a
+ * shorter complete one). If fewer than two tiles would remain, nothing is
+ * dropped so the strip never collapses to a single number.
+ */
+export function attachPulseSeries(
+  stats: PulseStat[],
+  series: { noteVolume: SeriesPoint[]; activeAuthors: SeriesPoint[]; relayEvents: SeriesPoint[] },
+  baselines?: { noteVolume?: EntityBaseline | null; activeAuthors?: EntityBaseline | null }
+): PulseStat[] {
+  const withBaseline = (
+    stat: PulseStat,
+    points: SeriesPoint[],
+    baseline?: EntityBaseline | null
+  ) => (baseline ? { ...stat, series: points, baseline } : { ...stat, series: points });
+  const withSeries = stats.map((stat) => {
+    const label = stat.label.toLowerCase();
+    if (/(^|_)note_volume(_|$)/.test(label) || /(^|_)notes?(_|$)/.test(label)) {
+      return withBaseline(stat, series.noteVolume, baselines?.noteVolume);
+    }
+    if (/(^|_)active_authors(_|$)/.test(label)) {
+      return withBaseline(stat, series.activeAuthors, baselines?.activeAuthors);
+    }
+    if (/(^|_)event_volume(_|$)/.test(label) || /(^|_)relay_events(_|$)/.test(label)) {
+      return { ...stat, series: series.relayEvents };
+    }
+    return stat;
+  });
+  const hasTrend = (stat: PulseStat) => Boolean(stat.series && stat.series.length >= 2);
+  if (!withSeries.some(hasTrend)) return withSeries;
+  const trending = withSeries.filter(hasTrend);
+  return trending.length >= 2 ? trending : withSeries;
+}
+
+export type HomeSectionFailures = {
+  notes: boolean;
+  profiles: boolean;
+  risingProfiles: boolean;
+  hashtags: boolean;
+  domains: boolean;
+};
+
+export type HomePageData = {
+  window: StatsWindow;
+  language?: string;
+  /** Viewer from the URL. The cookie is not read here. */
+  viewer?: string;
+  personalization?: Personalization;
+  /** Follow-list lookup failed. The lists are global and are not personalized. */
+  viewerCohortDegraded: boolean;
+  topLanguages?: TopLanguages;
+  currentSearchParams: URLSearchParams;
+  errorMessage: string;
+  homeTimedOut: boolean;
+  homeNotes: EventRecord[];
+  mediaLeaders: MediaLeaders;
+  rails: HomeRails;
+  hydratedHomeProfiles: Profile[];
+  hydratedHomeRisingProfiles: Profile[];
+  homeHashtags: HashtagEntry[];
+  homeDomains: DomainEntry[];
+  archiveDay: string | null;
+  coverageNotes: CoverageNote[];
+  noteAuthorsByPubkey: Record<string, Profile>;
+  pulseStats: PulseStat[];
+  relayLeaders: ReturnType<typeof extractRelayRows>;
+  upstreamCallCount: number;
+  computedAt?: string | null;
+  sectionFailures: HomeSectionFailures;
+  /** Set when `window=30d` was rejected. The shell redirects through the session cookie. */
+  discoveryWindowRedirect: string | null;
+};
+
+/**
+ * Homepage data orchestration collapsed into two stages:
+ * 1) discovery + windowed trends + network/relay stats in parallel
+ * 2) profile hydration for preview cards
+ */
+export async function loadHomePageData(
+  resolvedSearchParams: Record<string, string | string[] | undefined>
+): Promise<HomePageData> {
+  const currentSearchParams = toUrlSearchParams(resolvedSearchParams);
+  const window = readStatsWindow(resolvedSearchParams);
+  const lang = readLanguage(resolvedSearchParams);
+  const viewer = readViewer(resolvedSearchParams);
+  const scopedQuery = {
+    window,
+    ...(lang ? { lang } : {}),
+    ...(viewer ? { viewer } : {}),
+  };
+  // Hashtags on the home bundle stay global. The hashtag ranking page is personalized.
+  const globalRankingQuery = {
+    window,
+    ...(lang ? { lang } : {}),
+  };
+  const failedMessages: string[] = [];
+  let upstreamCallCount = 0;
+  let homeTimedOut = false;
+  const sectionFailures: HomeSectionFailures = {
+    notes: false,
+    profiles: false,
+    risingProfiles: false,
+    hashtags: false,
+    domains: false,
+  };
+
+  let payload: Awaited<ReturnType<typeof getDiscoveryHome>> | null = null;
+  let homeNotes: EventRecord[] = [];
+  let homeProfiles: Profile[] = [];
+  let homeRisingProfiles: Profile[] = [];
+  let homeHashtags: HashtagEntry[] = [];
+  let homeDomains: DomainEntry[] = [];
+  let networkStats: Awaited<ReturnType<typeof getNetworkStats>> | null = null;
+  let relayStats: Awaited<ReturnType<typeof getRelayStats>> | null = null;
+
+  // Pictures, videos, and shorts do not depend on the home payload. Overlap
+  // them with the first fan-out so a window change is not home-then-media.
+  const mediaLeadersPromise = loadHomeMediaLeaders(globalRankingQuery);
+  upstreamCallCount += 3;
+  const archiveDayPromise = getDiscoveryArchiveDays(1)
+    .then((days) => latestArchiveDay(days))
+    .catch(() => null);
+  const coverageNotesPromise = getRelayCoverageChanges().catch(() => [] as CoverageNote[]);
+
+  upstreamCallCount += 2;
+
+  const stageOne = await Promise.allSettled([
+    getDiscoveryHome("shortTtl", scopedQuery),
+    getNetworkStats("shortTtl"),
+    getRelayStats("shortTtl", relayStatsWindow(window)),
+    getStatsSeries("note_volume", "7d", "shortTtl"),
+    getStatsSeries("active_authors", "7d", "shortTtl"),
+    getStatsSeries("relay_events", "7d", "shortTtl"),
+  ]);
+  upstreamCallCount += 3;
+
+  const [
+    homeResult,
+    networkResult,
+    relayResult,
+    noteVolumeSeriesResult,
+    activeAuthorsSeriesResult,
+    relayEventsSeriesResult,
+  ] = stageOne;
+
+  if (homeResult.status === "rejected") {
+    const status = isApiError(homeResult.reason) ? homeResult.reason.status : null;
+    if (fallbackAfterRejected30d(window, "24h", status).hide30d) {
+      const previous = await lastDiscoveryWindow();
+      return {
+        window,
+        language: lang,
+        viewer,
+        personalization: undefined,
+        viewerCohortDegraded: false,
+        topLanguages: undefined,
+        currentSearchParams,
+        errorMessage: "",
+        homeTimedOut: false,
+        homeNotes: [],
+        mediaLeaders: {},
+        rails: EMPTY_HOME_RAILS,
+        hydratedHomeProfiles: [],
+        hydratedHomeRisingProfiles: [],
+        homeHashtags: [],
+        homeDomains: [],
+        archiveDay: null,
+        coverageNotes: [],
+        noteAuthorsByPubkey: {},
+        pulseStats: [],
+        relayLeaders: [],
+        upstreamCallCount,
+        computedAt: null,
+        sectionFailures,
+        discoveryWindowRedirect: unsupportedDiscoveryWindowHref(
+          buildWindowHref("/", currentSearchParams, previous)
+        ),
+      };
+    }
+  }
+
+  if (homeResult.status === "fulfilled") {
+    payload = homeResult.value;
+    homeNotes = payload.notes ?? [];
+    homeProfiles = payload.profiles ?? [];
+    homeRisingProfiles = payload.rising_profiles ?? [];
+    homeHashtags = payload.hashtags ?? [];
+    homeDomains = payload.domains ?? [];
+  } else {
+    homeTimedOut = isApiTimeoutError(homeResult.reason);
+    sectionFailures.notes = true;
+    sectionFailures.profiles = true;
+    sectionFailures.risingProfiles = true;
+    sectionFailures.hashtags = true;
+    sectionFailures.domains = true;
+    failedMessages.push(
+      toUserFacingErrorMessage(homeResult.reason, "Failed to load discovery home payload.")
+    );
+  }
+
+  // Backward-compatible empty-section fallbacks for older home bundles.
+  if (!homeTimedOut) {
+    const fallbackRequests: Array<{
+      key: "notes" | "profiles" | "risingProfiles" | "hashtags" | "domains";
+      promise: Promise<unknown>;
+    }> = [];
+    if (homeNotes.length === 0) {
+      fallbackRequests.push({
+        key: "notes",
+        promise: getTrendingNotes("shortTtl", scopedQuery),
+      });
+    }
+    if (homeProfiles.length === 0) {
+      fallbackRequests.push({
+        key: "profiles",
+        promise: getTrendingProfiles("shortTtl", scopedQuery),
+      });
+    }
+    if (homeRisingProfiles.length === 0) {
+      fallbackRequests.push({
+        key: "risingProfiles",
+        promise: getRisingProfiles("shortTtl", scopedQuery),
+      });
+    }
+    if (homeHashtags.length === 0) {
+      fallbackRequests.push({
+        key: "hashtags",
+        promise: getTrendingHashtags("shortTtl", globalRankingQuery),
+      });
+    }
+    if (homeDomains.length === 0) {
+      fallbackRequests.push({
+        key: "domains",
+        promise: getTrendingDomains("shortTtl", scopedQuery),
+      });
+    }
+    if (fallbackRequests.length > 0) {
+      upstreamCallCount += fallbackRequests.length;
+      const fallbackResults = await Promise.allSettled(
+        fallbackRequests.map((entry) => entry.promise)
+      );
+      for (let index = 0; index < fallbackRequests.length; index += 1) {
+        const entry = fallbackRequests[index]!;
+        const result = fallbackResults[index]!;
+        if (result.status !== "fulfilled") {
+          sectionFailures[entry.key] = true;
+          failedMessages.push(
+            toUserFacingErrorMessage(result.reason, `Failed to load trending ${entry.key}.`)
+          );
+          continue;
+        }
+        const value = result.value as Record<string, unknown>;
+        sectionFailures[entry.key] = false;
+        if (entry.key === "notes") homeNotes = (value.notes as EventRecord[] | undefined) ?? [];
+        if (entry.key === "profiles")
+          homeProfiles = (value.profiles as Profile[] | undefined) ?? [];
+        if (entry.key === "risingProfiles")
+          homeRisingProfiles = (value.profiles as Profile[] | undefined) ?? [];
+        if (entry.key === "hashtags")
+          homeHashtags = (value.hashtags as HashtagEntry[] | undefined) ?? [];
+        if (entry.key === "domains")
+          homeDomains = (value.domains as DomainEntry[] | undefined) ?? [];
+      }
+    }
+  }
+
+  // An unscoped ranking is the default. When that view has no notes, the
+  // English ranking is the richest substitute. The header still says
+  // "All languages" because the visitor did not pick a language.
+  if (!lang && !homeTimedOut && homeNotes.length === 0) {
+    try {
+      const english = await getDiscoveryHome("shortTtl", { ...scopedQuery, lang: "en" });
+      upstreamCallCount += 1;
+      if ((english.notes ?? []).length > 0) {
+        homeNotes = english.notes ?? [];
+        if (homeProfiles.length === 0) homeProfiles = english.profiles ?? [];
+        if (homeRisingProfiles.length === 0) homeRisingProfiles = english.rising_profiles ?? [];
+        if (homeHashtags.length === 0) homeHashtags = english.hashtags ?? [];
+        if (homeDomains.length === 0) homeDomains = english.domains ?? [];
+        sectionFailures.notes = false;
+      }
+    } catch {
+      // Keep the empty unscoped result.
+    }
+  }
+
+  if (networkResult.status === "fulfilled") {
+    networkStats = networkResult.value;
+  } else {
+    failedMessages.push(
+      toUserFacingErrorMessage(networkResult.reason, "Failed to load network fallback.")
+    );
+  }
+  if (relayResult.status === "fulfilled") {
+    relayStats = relayResult.value;
+  } else {
+    failedMessages.push(
+      toUserFacingErrorMessage(relayResult.reason, "Failed to load network fallback.")
+    );
+  }
+
+  const railsPromise = loadHomeRails(globalRankingQuery);
+  upstreamCallCount += 6;
+  const [mediaLeaders, rails] = await Promise.all([mediaLeadersPromise, railsPromise]);
+
+  let noteAuthorsByPubkey: Record<string, Profile> = {};
+  let hydratedHomeProfiles = homeProfiles;
+  let hydratedHomeRisingProfiles = homeRisingProfiles;
+  const railEvents = [rails.article, ...rails.conversations, ...rails.zapped, ...rails.live];
+  const notePreviewPubkeys = [
+    ...homeNotes.slice(0, 5),
+    ...Object.values(mediaLeaders),
+    ...railEvents,
+  ]
+    .map((note) => note?.pubkey)
+    .filter((pubkey): pubkey is string => typeof pubkey === "string" && pubkey.length > 0);
+  const profilePreviewPubkeys = homeProfiles
+    .slice(0, 5)
+    .filter((profile) => !hasRichIdentity(profile))
+    .map((profile) => profile.pubkey)
+    .filter((pubkey): pubkey is string => typeof pubkey === "string" && pubkey.length > 0);
+  const risingProfilePreviewPubkeys = homeRisingProfiles
+    .slice(0, 5)
+    .filter((profile) => !hasRichIdentity(profile))
+    .map((profile) => profile.pubkey)
+    .filter((pubkey): pubkey is string => typeof pubkey === "string" && pubkey.length > 0);
+  const pubkeysToHydrate = Array.from(
+    new Set(
+      [...notePreviewPubkeys, ...profilePreviewPubkeys, ...risingProfilePreviewPubkeys].map(
+        (pubkey) => pubkey.toLowerCase()
+      )
+    )
+  );
+
+  if (pubkeysToHydrate.length > 0) {
+    upstreamCallCount += 1;
+    try {
+      noteAuthorsByPubkey = await fetchProfilesByPubkey(pubkeysToHydrate, "shortTtl");
+      const hydrateProfile = (profile: Profile) => {
+        const key = typeof profile.pubkey === "string" ? profile.pubkey.toLowerCase() : "";
+        return mergeHydratedProfile(profile, key ? noteAuthorsByPubkey[key] : undefined);
+      };
+      hydratedHomeProfiles = homeProfiles.map(hydrateProfile);
+      hydratedHomeRisingProfiles = homeRisingProfiles.map(hydrateProfile);
+    } catch {
+      noteAuthorsByPubkey = {};
+      hydratedHomeProfiles = homeProfiles;
+      hydratedHomeRisingProfiles = homeRisingProfiles;
+    }
+  }
+
+  const sections = asRecord(payload?.sections);
+  const networkSummary = asRecord(sections?.network_summary);
+  const homeStats = isRecord(payload?.stats) ? payload.stats : {};
+  // Unscoped network stats would overwrite language-scoped note volume and
+  // active authors. Relay stats stay on the unscoped call below.
+  const pulseSource =
+    lang && networkSummary
+      ? {
+          ...homeStats,
+          activity: asRecord(networkSummary.activity) ?? undefined,
+          relays: asRecord(networkSummary.relays) ?? undefined,
+        }
+      : { ...homeStats, ...(networkStats ?? {}) };
+  const basePulseStats = pickTopPrimitiveStats(
+    pulseSource,
+    networkPulsePreferredKeys(window),
+    NETWORK_PULSE_TILE_LIMIT,
+    window
+  );
+  const noteVolumeSeries =
+    noteVolumeSeriesResult.status === "fulfilled"
+      ? normalizeSeriesPoints(noteVolumeSeriesResult.value)
+      : [];
+  const activeAuthorsSeries =
+    activeAuthorsSeriesResult.status === "fulfilled"
+      ? normalizeSeriesPoints(activeAuthorsSeriesResult.value)
+      : [];
+  const relayEventsSeries =
+    relayEventsSeriesResult.status === "fulfilled"
+      ? normalizeSeriesPoints(relayEventsSeriesResult.value)
+      : [];
+  // Attach each history series to its own metric only; a tile must never
+  // borrow another metric's trend.
+  const pulseStats = attachPulseSeries(
+    basePulseStats,
+    {
+      noteVolume: lang ? [] : noteVolumeSeries,
+      activeAuthors: lang ? [] : activeAuthorsSeries,
+      relayEvents: relayEventsSeries,
+    },
+    lang
+      ? undefined
+      : {
+          noteVolume: baselineFromSeries(noteVolumeSeriesResult),
+          activeAuthors: baselineFromSeries(activeAuthorsSeriesResult),
+        }
+  ).map((stat) => (lang ? { ...stat, label: languageScopedStatLabel(stat.label) } : stat));
+  const relayWindow = relayStatsWindow(window);
+  let relayLeaders = extractRelayRows(networkSummary ?? payload, 1, relayWindow);
+  if (relayLeaders.length === 0) {
+    relayLeaders = extractRelayRows(relayStats, 1, relayWindow);
+  }
+
+  // Prefer discovery/home computed_at: that tracks the live homepage
+  // snapshots (refreshed every few minutes). Do NOT prefer stats/series
+  // computed_at — that comes from hourly stats_snapshot_history rows
+  // (ON CONFLICT DO NOTHING within the hour), so it can look ~50m stale
+  // even when the homepage itself is fresh.
+  const computedAt =
+    (isRecord(payload) &&
+      typeof (payload as Record<string, unknown>).computed_at === "string" &&
+      ((payload as Record<string, unknown>).computed_at as string)) ||
+    (isRecord(networkStats) &&
+      typeof (networkStats as Record<string, unknown>).computed_at === "string" &&
+      ((networkStats as Record<string, unknown>).computed_at as string)) ||
+    null;
+
+  const [archiveDay, coverageNotes] = await Promise.all([archiveDayPromise, coverageNotesPromise]);
+
+  traceHomeFanOut(upstreamCallCount, {
+    window: window === "30d" ? 30 : window === "7d" ? 7 : 1,
+    homeTimedOut: homeTimedOut ? 1 : 0,
+    hydratedPubkeys: pubkeysToHydrate.length,
+    failedMessages: failedMessages.length,
+  });
+
+  return {
+    window,
+    language: lang,
+    viewer,
+    personalization: viewerCohortDegraded(payload) ? undefined : readPersonalization(payload),
+    viewerCohortDegraded: viewerCohortDegraded(payload),
+    topLanguages:
+      normalizeTopLanguages(payload?.top_languages) ??
+      normalizeTopLanguages(networkSummary?.top_languages),
+    currentSearchParams,
+    errorMessage: summarizeLoadErrors(failedMessages) ?? "",
+    homeTimedOut,
+    homeNotes,
+    mediaLeaders,
+    rails,
+    hydratedHomeProfiles,
+    hydratedHomeRisingProfiles,
+    homeHashtags,
+    homeDomains,
+    archiveDay,
+    coverageNotes,
+    noteAuthorsByPubkey,
+    pulseStats,
+    relayLeaders,
+    upstreamCallCount,
+    computedAt,
+    sectionFailures,
+    discoveryWindowRedirect: null,
+  };
+}

@@ -1,0 +1,277 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  belowVolumeFloor,
+  formatEvidenceValue,
+  listedVolume,
+  mapServerRankingReasons,
+  rankMovement,
+  reasonsBesideSourceFigure,
+  sourceCount,
+} from "./reasons";
+
+describe("formatEvidenceValue", () => {
+  it("never renders fractional people or things", () => {
+    expect(formatEvidenceValue(3.75, "followers")).toBe("4");
+    expect(formatEvidenceValue(9.5, "followers")).toBe("10");
+    expect(formatEvidenceValue(1.2, "posts")).toBe("1");
+  });
+
+  it("keeps one decimal for small ratios and none above ten", () => {
+    expect(formatEvidenceValue(8.214, "interactions per note")).toBe("8.2");
+    expect(formatEvidenceValue(0.403, "interactions per follower")).toBe("0.4");
+    expect(formatEvidenceValue(12.6, "interactions per note")).toBe("13");
+  });
+});
+
+describe("mapServerRankingReasons", () => {
+  it("rounds evidence, singularises units, and prefixes growth with +", () => {
+    expect(
+      mapServerRankingReasons({
+        rank: 1,
+        score: 1,
+        reasons: [
+          { code: "follower_growth", evidence: [{ metric: "x", value: 3.75, unit: "followers" }] },
+          {
+            code: "engagement_quality",
+            evidence: [{ metric: "x", value: 8.214, unit: "interactions per note" }],
+          },
+        ],
+      })
+    ).toEqual([
+      { text: "Gained 4 followers", code: "follower_growth" },
+      {
+        text: "Each note gets about 8.2 reactions, replies, and zaps",
+        code: "engagement_quality",
+      },
+    ]);
+  });
+
+  it("drops count-based reasons below the evidence floor so a rank is never justified by one post", () => {
+    expect(
+      mapServerRankingReasons({
+        rank: 1,
+        score: 1,
+        reasons: [
+          { code: "publishing_momentum", evidence: [{ metric: "x", value: 1, unit: "posts" }] },
+          {
+            code: "engagement_received",
+            evidence: [{ metric: "x", value: 40, unit: "interactions" }],
+          },
+        ],
+      })
+    ).toEqual([{ text: "40 interactions in total", code: "engagement_received" }]);
+  });
+
+  it("drops ratio reasons below one and keeps the ones worth reading", () => {
+    expect(
+      mapServerRankingReasons({
+        rank: 1,
+        score: 1,
+        reasons: [
+          {
+            code: "relative_engagement_growth",
+            evidence: [{ metric: "x", value: 0.1, unit: "interactions per follower" }],
+          },
+          {
+            code: "engagement_quality",
+            evidence: [{ metric: "x", value: 6.8, unit: "interactions per note" }],
+          },
+          {
+            code: "relative_engagement_growth",
+            evidence: [{ metric: "x", value: 10, unit: "interactions per follower" }],
+          },
+        ],
+      })
+    ).toEqual([
+      {
+        text: "Each note gets about 6.8 reactions, replies, and zaps",
+        code: "engagement_quality",
+      },
+      {
+        text: "About 10 interactions for each follower",
+        code: "relative_engagement_growth",
+      },
+    ]);
+  });
+
+  it("keeps a single saver, sat, or supporter as a real rank", () => {
+    expect(
+      mapServerRankingReasons({
+        rank: 1,
+        score: 1,
+        reasons: [
+          { code: "saved_by", evidence: [{ metric: "bookmark_count", value: 1, unit: "people" }] },
+          { code: "zap_volume", evidence: [{ metric: "zap_sats", value: 1, unit: "sats" }] },
+          {
+            code: "supporter_sats",
+            evidence: [{ metric: "capped_sats", value: 1, unit: "sats" }],
+          },
+          {
+            code: "audience_size",
+            evidence: [{ metric: "follower_count", value: 1, unit: "followers" }],
+          },
+        ],
+      })
+    ).toEqual([
+      { text: "Saved by 1 person", code: "saved_by" },
+      { text: "1 sat in this window", code: "zap_volume" },
+      { text: "1 sat, with each sender capped", code: "supporter_sats" },
+      { text: "1 follower", code: "audience_size" },
+    ]);
+  });
+
+  it("humanises unknown codes instead of discarding the server's rationale", () => {
+    expect(
+      mapServerRankingReasons({ rank: 1, score: 1, reasons: [{ code: "zap_velocity" }] })
+    ).toEqual([{ text: "zap velocity", support: undefined, code: "zap_velocity" }]);
+  });
+
+  it("skips a combined score and says a newer row was posted recently", () => {
+    expect(
+      mapServerRankingReasons({
+        rank: 1,
+        score: 1,
+        reasons: [{ code: "combined_engagement" }, { code: "recency" }],
+      })
+    ).toEqual([{ text: "Posted recently and already in this ranking", code: "recency" }]);
+  });
+});
+
+describe("reasonsBesideSourceFigure", () => {
+  it("drops the why-now line when author breadth is already the source figure", () => {
+    const ranking = {
+      rank: 1,
+      score: 455,
+      source_breadth: 455,
+      reasons: [
+        {
+          code: "author_breadth",
+          evidence: [{ metric: "unique_authors", value: 455, unit: "authors" }],
+        },
+        {
+          code: "mention_volume",
+          evidence: [{ metric: "event_count", value: 1576, unit: "events" }],
+        },
+      ],
+    };
+    const presented = mapServerRankingReasons(ranking);
+    expect(presented.map((reason) => reason.code)).toEqual(["author_breadth", "mention_volume"]);
+    expect(reasonsBesideSourceFigure(ranking, presented)).toEqual([]);
+  });
+
+  it("does not fall through to volume when one author is below the display floor", () => {
+    const ranking = {
+      rank: 1,
+      score: 1,
+      reasons: [
+        {
+          code: "author_breadth",
+          evidence: [{ metric: "unique_authors", value: 1, unit: "authors" }],
+        },
+        {
+          code: "mention_volume",
+          evidence: [{ metric: "event_count", value: 40, unit: "events" }],
+        },
+      ],
+    };
+    const presented = mapServerRankingReasons(ranking);
+    expect(presented.map((reason) => reason.code)).toEqual(["mention_volume"]);
+    expect(reasonsBesideSourceFigure(ranking, presented)).toEqual([]);
+  });
+
+  it("says what the followed accounts did, and leads with that sentence", () => {
+    const evidence = (metric: string, value: number, unit: string) => [{ metric, value, unit }];
+    const presented = mapServerRankingReasons({
+      rank: 1,
+      score: 1,
+      reasons: [
+        {
+          code: "audience_size",
+          evidence: evidence("trusted_follower_count", 40, "followers"),
+        },
+        { code: "followed_engagers", evidence: evidence("cohort_accounts", 3, "accounts") },
+        { code: "followed_zappers", evidence: evidence("cohort_sats", 12, "sats") },
+        { code: "followed_savers", evidence: evidence("cohort_savers", 2, "people") },
+        { code: "followed_replies", evidence: evidence("cohort_replies", 4, "replies") },
+        { code: "followed_by", evidence: evidence("cohort_follows", 5, "accounts") },
+        { code: "followed_supporters", evidence: evidence("cohort_sats", 9, "sats") },
+        { code: "followed_authors", evidence: evidence("cohort_authors", 1, "authors") },
+      ],
+    });
+    expect(presented.map((reason) => reason.text)).toEqual([
+      "3 accounts you follow engaged with it",
+      "12 sats from accounts you follow",
+      "Saved by 2 accounts you follow",
+      "4 replies from accounts you follow",
+      "Followed by 5 accounts you follow",
+      "9 sats from accounts you follow",
+      "1 author you follow used it",
+      "40 followers",
+    ]);
+    expect(presented[0]?.text).not.toMatch(/followed engagers/i);
+
+    expect(
+      mapServerRankingReasons({
+        rank: 1,
+        score: 1,
+        reasons: [
+          { code: "followed_by", evidence: evidence("cohort_new_followers", 6, "followers") },
+        ],
+      })
+    ).toEqual([
+      {
+        text: "6 new followers from accounts you follow",
+        code: "followed_by",
+      },
+    ]);
+    expect(
+      mapServerRankingReasons({
+        rank: 1,
+        score: 1,
+        reasons: [{ code: "followed_engagers" }],
+      })[0]?.text
+    ).toBe("Accounts you follow engaged with it");
+  });
+});
+
+describe("sourceCount", () => {
+  it("uses source breadth as the row figure and ignores missing or empty breadth", () => {
+    expect(sourceCount({ rank: 2, score: 4000, source_breadth: 290.4 })).toBe(290);
+    expect(sourceCount({ rank: 1, score: 12 })).toBeNull();
+    expect(sourceCount({ rank: 1, score: 12, source_breadth: 0 })).toBeNull();
+    expect(sourceCount(undefined)).toBeNull();
+  });
+});
+
+describe("listedVolume", () => {
+  it("treats a count under two as below the floor and keeps a missing count", () => {
+    expect(belowVolumeFloor(listedVolume([1]))).toBe(true);
+    expect(belowVolumeFloor(listedVolume([0, 12]))).toBe(false);
+    expect(belowVolumeFloor(listedVolume([undefined]))).toBe(false);
+    expect(listedVolume([0, 0])).toBe(0);
+  });
+});
+
+describe("rankMovement", () => {
+  it("derives places moved from previous_rank", () => {
+    expect(rankMovement({ rank: 2, score: 1, previous_rank: 5 })).toEqual({
+      direction: "up",
+      places: 3,
+    });
+    expect(rankMovement({ rank: 4, score: 1, previous_rank: 1 })).toEqual({
+      direction: "down",
+      places: 3,
+    });
+    expect(rankMovement({ rank: 4, score: 1, previous_rank: 4 })).toBeNull();
+  });
+
+  it("falls back to rank_delta and stays silent without history", () => {
+    expect(rankMovement({ rank: 2, score: 1, rank_delta: 1 })).toEqual({
+      direction: "up",
+      places: 1,
+    });
+    expect(rankMovement({ rank: 2, score: 1 })).toBeNull();
+    expect(rankMovement(undefined)).toBeNull();
+  });
+});

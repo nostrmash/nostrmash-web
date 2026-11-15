@@ -1,0 +1,354 @@
+import Link from "@/components/app-link";
+
+import {
+  CardHitTarget,
+  cardHitTargetClassName,
+  cardTierClassName,
+  DiscoveryActionLinks,
+  DiscoveryPill,
+} from "@/components/explorer/card-grammar";
+import { PostEngagement } from "@/components/explorer/post-engagement";
+import { TopZap } from "@/components/explorer/top-zap";
+import { getArticlePresentation } from "@/components/explorer/article-meta";
+import { mapNoteWhyNow, WhyNow } from "@/components/explorer/why-now";
+import { ProfileAvatar } from "@/components/explorer/profile-avatar";
+import { BlossomNextImage } from "@/components/ui/blossom-image";
+import { Timestamp } from "@/components/explorer/timestamp";
+import { RichInlineText, type NoteContentResolution } from "@/components/explorer/note-content";
+import {
+  postEngagementStats,
+  isNextImageCompatibleSrc,
+  normalizeImageSrc,
+  noteAuthorIdentifier,
+  noteInlineAuthorProfile,
+  profileHref,
+  formatProfileSecondary,
+  profileLabel,
+  profileSecondaryLabel,
+  truncateIdentifier,
+  truncateProfileLabel,
+} from "@/components/explorer/utils";
+import type { EventRecord, Profile } from "@/lib/types/api";
+
+export function ArticleCard({
+  article,
+  author,
+  href,
+  rank,
+  discoverySignals = false,
+  contentResolution,
+  showAuthor = true,
+  showUtilityLinks = true,
+}: {
+  article: EventRecord;
+  author?: Profile;
+  href?: string;
+  rank?: number;
+  discoverySignals?: boolean;
+  contentResolution?: NoteContentResolution;
+  /** Hide the author row. The profile page already names the subject. */
+  showAuthor?: boolean;
+  showUtilityLinks?: boolean;
+}) {
+  const presentation = getArticlePresentation(article);
+  const imageSrc = normalizeImageSrc(presentation.image);
+  const resolvedAuthor = author ?? noteInlineAuthorProfile(article);
+  const resolvedArticleId =
+    (typeof article.id === "string" && article.id.length > 0
+      ? article.id
+      : typeof article.event_id === "string" && article.event_id.length > 0
+        ? article.event_id
+        : typeof article.eventId === "string" && article.eventId.length > 0
+          ? article.eventId
+          : undefined) ?? undefined;
+  const articleHref =
+    href ?? (resolvedArticleId ? `/notes/${encodeURIComponent(resolvedArticleId)}` : undefined);
+
+  const authorLabel = resolvedAuthor ? profileLabel(resolvedAuthor) : noteAuthorIdentifier(article);
+  const authorSecondaryLabel = resolvedAuthor
+    ? profileSecondaryLabel(resolvedAuthor)
+    : noteAuthorIdentifier(article);
+  const authorHref = profileHref(
+    resolvedAuthor,
+    typeof article.pubkey === "string" ? article.pubkey : undefined
+  );
+  const authorAvatarProfile =
+    resolvedAuthor ??
+    (typeof article.pubkey === "string" && article.pubkey.length > 0
+      ? { pubkey: article.pubkey }
+      : null);
+
+  const metrics = postEngagementStats(article);
+
+  const isTopRank = typeof rank === "number" && rank <= 3;
+  const rankLabel = typeof rank === "number" ? String(rank).padStart(2, "0") : null;
+  const score =
+    typeof article.score === "number" && Number.isFinite(article.score) ? article.score : null;
+  const authorSecondary = authorSecondaryLabel ? formatProfileSecondary(authorSecondaryLabel) : "";
+
+  if (rankLabel) {
+    return (
+      <article
+        className={`group ${cardTierClassName("standard")} ${
+          isTopRank ? "border-accent-soft/40" : "border-edge/70"
+        } ${articleHref ? cardHitTargetClassName : ""}`}
+      >
+        <div className="flex items-start gap-3">
+          <span className="text-accent-ink w-7 shrink-0 pt-2 text-lg leading-none tracking-[-0.05em] tabular-nums">
+            {rankLabel}
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
+              {showAuthor && authorAvatarProfile ? (
+                <ProfileAvatar
+                  profile={authorAvatarProfile}
+                  size={36}
+                  alt={authorLabel}
+                  href={authorHref}
+                  className="border-edge-strong h-9 w-9 rounded-full border object-cover"
+                />
+              ) : null}
+              {showAuthor && authorHref ? (
+                <Link
+                  href={authorHref}
+                  title={authorLabel}
+                  className="text-ink-soft hover:text-ink-strong max-w-[min(100%,16rem)] truncate font-medium hover:underline"
+                >
+                  {truncateProfileLabel(authorLabel)}
+                </Link>
+              ) : showAuthor ? (
+                <span className="text-ink-soft max-w-[min(100%,16rem)] truncate font-medium">
+                  {truncateProfileLabel(authorLabel)}
+                </span>
+              ) : null}
+              {showAuthor && authorSecondary ? (
+                <span
+                  className="text-ink-faint max-w-[16rem] truncate"
+                  title={authorSecondaryLabel ?? undefined}
+                >
+                  {authorSecondary}
+                </span>
+              ) : null}
+              <Timestamp unixSeconds={presentation.publishedAt} />
+            </div>
+            {articleHref ? (
+              <Link href={articleHref} className="text-ink hover:text-ink-strong">
+                <h3 className="mt-2 line-clamp-2 text-base leading-6 font-semibold tracking-tight [overflow-wrap:anywhere]">
+                  {presentation.title}
+                </h3>
+              </Link>
+            ) : (
+              <h3 className="text-ink mt-2 line-clamp-2 text-base leading-6 font-semibold tracking-tight [overflow-wrap:anywhere]">
+                {presentation.title}
+              </h3>
+            )}
+            {presentation.summary ? (
+              <p className="text-ink-dim mt-1.5 line-clamp-2 text-sm leading-5 [overflow-wrap:anywhere]">
+                {presentation.summary}
+              </p>
+            ) : null}
+            <p className="text-ink-faint mt-2 text-xs">
+              {[
+                presentation.readingMinutes ? `${presentation.readingMinutes} min read` : null,
+                presentation.language?.toUpperCase(),
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            </p>
+          </div>
+          {imageSrc && isNextImageCompatibleSrc(imageSrc) ? (
+            <BlossomNextImage
+              src={imageSrc}
+              alt=""
+              width={88}
+              height={88}
+              unoptimized
+              className="border-edge-strong h-[5.5rem] w-[5.5rem] shrink-0 rounded-lg border object-cover"
+            />
+          ) : null}
+        </div>
+        {discoverySignals ? (
+          <WhyNow reasons={mapNoteWhyNow(article)} showLabel={false} className="mt-2.5 sm:mt-3" />
+        ) : null}
+        <PostEngagement stats={metrics} className="mt-2.5 sm:mt-3" />
+        <TopZap source={article} />
+        {showUtilityLinks && resolvedArticleId ? (
+          <div className="text-ink-muted mt-2.5 flex flex-wrap items-center gap-2 text-xs">
+            <DiscoveryActionLinks
+              actions={[
+                { label: "Read article", href: articleHref },
+                {
+                  label: "Inspect thread",
+                  href: `/notes/${encodeURIComponent(resolvedArticleId)}#conversation-context`,
+                },
+                {
+                  label: "Seen on relays",
+                  href: `/notes/${encodeURIComponent(resolvedArticleId)}#note-provenance`,
+                },
+              ]}
+            />
+          </div>
+        ) : null}
+        {articleHref ? (
+          <CardHitTarget href={articleHref} label={`Read article by ${authorLabel}`} />
+        ) : null}
+      </article>
+    );
+  }
+
+  return (
+    <article
+      className={`group ${cardTierClassName("standard")} ${
+        isTopRank ? "border-accent-soft/40" : "border-edge/70"
+      } ${articleHref ? cardHitTargetClassName : ""}`}
+    >
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        {rankLabel ? (
+          <span className="text-accent-ink mr-1 text-lg leading-none tracking-[-0.05em] tabular-nums">
+            {rankLabel}
+          </span>
+        ) : null}
+        <DiscoveryPill tone="neutral" className="px-2 py-0.5 text-[10px] tracking-wide uppercase">
+          Long-form
+        </DiscoveryPill>
+        {presentation.readingMinutes ? (
+          <span className="text-ink-faint">{presentation.readingMinutes} min read</span>
+        ) : null}
+        {presentation.language ? (
+          <span className="text-ink-faint uppercase">{presentation.language}</span>
+        ) : null}
+      </div>
+
+      <div className="mt-2.5 flex items-start gap-3">
+        {imageSrc && isNextImageCompatibleSrc(imageSrc) ? (
+          <BlossomNextImage
+            src={imageSrc}
+            alt={presentation.title}
+            width={96}
+            height={96}
+            unoptimized
+            className="border-edge-strong h-16 w-16 shrink-0 rounded-lg border object-cover sm:h-20 sm:w-20"
+          />
+        ) : null}
+        <div className="min-w-0 flex-1">
+          {articleHref ? (
+            <Link href={articleHref} className="text-ink hover:text-ink-strong">
+              <h3 className="text-base leading-6 font-semibold tracking-tight [overflow-wrap:anywhere] sm:text-lg">
+                {presentation.title}
+              </h3>
+            </Link>
+          ) : (
+            <h3 className="text-ink text-base leading-6 font-semibold tracking-tight [overflow-wrap:anywhere] sm:text-lg">
+              {presentation.title}
+            </h3>
+          )}
+          {presentation.summary ? (
+            <RichInlineText
+              text={presentation.summary}
+              tags={article.tags}
+              className="text-ink-dim mt-1.5 line-clamp-3 text-sm leading-5 [overflow-wrap:anywhere] sm:leading-6"
+              resolution={contentResolution}
+            />
+          ) : null}
+        </div>
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+        {showAuthor && authorAvatarProfile ? (
+          <ProfileAvatar
+            profile={authorAvatarProfile}
+            size={24}
+            alt={authorLabel}
+            href={authorHref}
+            className="border-edge-strong h-6 w-6 rounded-full border object-cover"
+          />
+        ) : null}
+        {showAuthor && authorHref ? (
+          <Link
+            href={authorHref}
+            title={authorLabel}
+            className="text-ink-soft hover:text-ink-strong inline-block max-w-[min(100%,16rem)] truncate font-medium hover:underline"
+          >
+            {truncateProfileLabel(authorLabel)}
+          </Link>
+        ) : showAuthor ? (
+          <span
+            className="text-ink-soft inline-block max-w-[min(100%,16rem)] truncate font-medium"
+            title={authorLabel}
+          >
+            {truncateProfileLabel(authorLabel)}
+          </span>
+        ) : null}
+        {showAuthor && authorSecondaryLabel && authorHref ? (
+          <Link
+            href={authorHref}
+            className="text-ink-faint hover:text-ink-muted"
+            title={authorSecondaryLabel}
+          >
+            {truncateIdentifier(authorSecondaryLabel, "npub", "secondary")}
+          </Link>
+        ) : showAuthor && authorSecondaryLabel ? (
+          <span className="text-ink-faint" title={authorSecondaryLabel}>
+            {truncateIdentifier(authorSecondaryLabel, "npub", "secondary")}
+          </span>
+        ) : null}
+        {showAuthor ? (
+          <span aria-hidden className="text-ink-faint/70">
+            •
+          </span>
+        ) : null}
+        <Timestamp unixSeconds={presentation.publishedAt} />
+      </div>
+
+      {presentation.hashtags.length > 0 ? (
+        <div className="text-ink-muted mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+          <span className="text-ink-faint">Topics</span>
+          {presentation.hashtags.map((hashtag) => (
+            <span key={hashtag} className="inline-flex items-center gap-2">
+              <span aria-hidden className="text-ink-faint/70">
+                •
+              </span>
+              <Link
+                href={`/hashtags/${encodeURIComponent(hashtag)}`}
+                className="text-ink-dim hover:text-ink transition"
+              >
+                {`#${hashtag}`}
+              </Link>
+            </span>
+          ))}
+        </div>
+      ) : null}
+
+      {discoverySignals && score !== null ? (
+        <div className="text-ink-muted mt-2 text-xs">
+          <span className="text-ink-faint">Score</span>{" "}
+          <span className="text-ink-soft font-medium">{score.toLocaleString()}</span>
+        </div>
+      ) : null}
+
+      <PostEngagement stats={metrics} className="mt-2.5 sm:mt-3" />
+      <TopZap source={article} />
+
+      {showUtilityLinks && resolvedArticleId ? (
+        <div className="text-ink-muted mt-2.5 flex flex-wrap items-center gap-2 text-xs sm:mt-3">
+          <DiscoveryActionLinks
+            actions={[
+              { label: "Read article", href: articleHref },
+              {
+                label: "Inspect thread",
+                href: `/notes/${encodeURIComponent(resolvedArticleId)}#conversation-context`,
+              },
+              {
+                label: "Seen on relays",
+                href: `/notes/${encodeURIComponent(resolvedArticleId)}#note-provenance`,
+              },
+            ]}
+          />
+        </div>
+      ) : null}
+      {articleHref ? (
+        <CardHitTarget href={articleHref} label={`Read article by ${authorLabel}`} />
+      ) : null}
+    </article>
+  );
+}

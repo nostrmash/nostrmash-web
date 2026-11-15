@@ -1,0 +1,14 @@
+{
+  "advisories": [
+    {
+      "id": "GHSA-3g3m-2fjr-6pw4",
+      "package": "glob",
+      "reason": "Moderate AbortSignal bypass in glob 10.5.0 and 13.x, pulled in only by @opennextjs/cloudflare during the build. The deployed Worker does not accept glob patterns or run the glob CLI. The patched release is glob 14, a breaking upgrade for those callers. The glob 10 CLI injection advisory is already cleared by the 10.5.0 override."
+    },
+    {
+      "id": "GHSA-g3hv-75wg-m249",
+      "package": "minimatch",
+      "reason": "Moderate glob-pattern DoS in minimatch 9 and 10, same OpenNext build path as the glob advisory. The patched line is minimatch 11. Build globs are fixed strings in our toolchain, not attacker-controlled note content. pnpm audit --prod does not report it."
+    }
+  ]
+}

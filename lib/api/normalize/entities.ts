@@ -1,0 +1,425 @@
+import { COMMENT_KIND } from "@/lib/notes/kinds";
+import { LONG_FORM_KIND } from "@/lib/types/api";
+import type {
+  ArticleRecord,
+  DomainEntry,
+  EventRecord,
+  HashtagEntry,
+  Profile,
+  ProfileField,
+  ProfileStats,
+} from "@/lib/types/api";
+import {
+  asArray,
+  asBoolean,
+  asNumber,
+  asRecord,
+  asString,
+  compactDefined,
+  firstString,
+  parseJsonRecord,
+  parseNumericAmount,
+} from "@/lib/api/normalize/helpers";
+import { eventRecordSchema, profileSchema } from "@/lib/api/schemas/core";
+import { parseEntityWithIdentity } from "@/lib/api/schemas/parse";
+import { normalizeDiscoveryRanking } from "@/lib/api/normalize/ranking";
+
+export function normalizeEventRecord(value: unknown): EventRecord | null {
+  const raw = asRecord(value);
+  if (!raw) return null;
+  const counts = asRecord(raw.counts);
+  // Related/activity entries wrap the signed event in an `event` envelope and
+  // only lift a subset of fields to the top level. Fill the gaps from the
+  // envelope so kind-aware rendering (reposts, hidden kinds, threading) works.
+  const envelope = asRecord(raw.event);
+  const record: Record<string, unknown> = { ...raw };
+  if (envelope) {
+    for (const key of ["kind", "tags", "sig", "created_at", "pubkey", "content"] as const) {
+      if (record[key] === undefined && envelope[key] !== undefined) {
+        record[key] = envelope[key];
+      }
+    }
+  }
+
+  const id =
+    asString(record.id) ??
+    asString(record.event_id) ??
+    asString(record.eventId) ??
+    asString(record.note_id) ??
+    asString(record.noteId) ??
+    "";
+
+  // Fail closed: events without a usable identity must not enter list UIs.
+  if (!id) return null;
+
+  const normalized = {
+    ...record,
+    id,
+    pubkey: asString(record.pubkey) ?? asString(record.author_pubkey),
+    reply_count:
+      asNumber(record.reply_count) ?? asNumber(record.replies) ?? asNumber(counts?.reply_count),
+    reaction_count:
+      asNumber(record.reaction_count) ??
+      asNumber(record.reactions) ??
+      asNumber(counts?.reaction_count),
+    repost_count:
+      asNumber(record.repost_count) ?? asNumber(record.reposts) ?? asNumber(counts?.repost_count),
+    quote_count:
+      asNumber(record.quote_count) ?? asNumber(record.quotes) ?? asNumber(counts?.quote_count),
+    zap_count: asNumber(record.zap_count) ?? asNumber(record.zaps) ?? asNumber(counts?.zap_count),
+    zap_msats: asNumber(record.zap_msats) ?? asNumber(counts?.zap_msats),
+    bookmark_count: asNumber(record.bookmark_count),
+    ranking: normalizeDiscoveryRanking(record.ranking),
+  } satisfies EventRecord;
+
+  return parseEntityWithIdentity(eventRecordSchema, normalized, "normalizeEventRecord", {
+    requireId: true,
+    strictHexId: true,
+    requirePubkey: false,
+  }) as EventRecord | null;
+}
+
+/**
+ * List / metadata kinds that store their payload in tags (or empty content)
+ * and must not appear as notes in feeds or search.
+ * NIP-02 contacts, NIP-51 lists/sets, NIP-65 relays, NIP-17 DM relays,
+ * NIP-78 app data, Blossom/server lists. Kind 1111 stays out of those feeds
+ * and is still opened from a conversation.
+ */
+export const HIDDEN_NOTE_KINDS = new Set([
+  3, 5, 1111, 1984, 10000, 10001, 10002, 10003, 10004, 10005, 10006, 10007, 10009, 10012, 10015,
+  10030, 10050, 10063, 10096, 30000, 30001, 30002, 30003, 30004, 30005, 30007, 30015, 30030, 30078,
+]);
+
+export function isHiddenNoteKind(event: { kind?: number } | null | undefined): boolean {
+  return typeof event?.kind === "number" && HIDDEN_NOTE_KINDS.has(event.kind);
+}
+
+/** Feeds hide comments. A comment still has a note page and a reply card. */
+export function isReadableNoteKind(event: { kind?: number } | null | undefined): boolean {
+  return !isHiddenNoteKind(event) || event?.kind === COMMENT_KIND;
+}
+
+export function normalizeEventRecords(value: unknown): EventRecord[] {
+  return asArray(value)
+    .map((entry) => normalizeEventRecord(entry))
+    .filter((entry): entry is EventRecord => entry !== null && !isHiddenNoteKind(entry));
+}
+
+export function extractArticleTagValue(
+  record: Record<string, unknown>,
+  name: string
+): string | undefined {
+  const tags = record.tags;
+  if (!Array.isArray(tags)) return undefined;
+  for (const tag of tags) {
+    if (!Array.isArray(tag) || tag.length < 2) continue;
+    if (String(tag[0]).toLowerCase() !== name.toLowerCase()) continue;
+    const candidate = asString(tag[1]);
+    if (candidate) return candidate;
+  }
+  return undefined;
+}
+
+export function normalizeArticleRecord(value: unknown): ArticleRecord | null {
+  const base = normalizeEventRecord(value);
+  if (!base) return null;
+  const record = asRecord(value) ?? {};
+  const author = normalizeProfile(record.author);
+  const publishedAtRaw =
+    asNumber(record.published_at) ??
+    parseNumericAmount(extractArticleTagValue(record, "published_at"));
+
+  return compactDefined({
+    ...base,
+    kind: asNumber(base.kind) ?? LONG_FORM_KIND,
+    title: asString(record.title) ?? extractArticleTagValue(record, "title"),
+    summary:
+      asString(record.summary) ??
+      asString(record.description) ??
+      extractArticleTagValue(record, "summary"),
+    image: asString(record.image) ?? extractArticleTagValue(record, "image"),
+    language: asString(record.language) ?? extractArticleTagValue(record, "language"),
+    published_at: publishedAtRaw,
+    score: asNumber(record.score),
+    author: author ?? undefined,
+  }) as ArticleRecord;
+}
+
+export function normalizeArticleRecords(value: unknown): ArticleRecord[] {
+  return asArray(value)
+    .map((entry) => normalizeArticleRecord(entry))
+    .filter((entry): entry is ArticleRecord => entry !== null && entry.id.length > 0);
+}
+
+export const AUTHORED_NOTE_EXCLUDED_KINDS = new Set([0, 6, 7, 9734, 9735, ...HIDDEN_NOTE_KINDS]);
+
+export function eventTagMarker(tag: unknown): string {
+  if (!Array.isArray(tag) || tag.length < 4) return "";
+  return typeof tag[3] === "string" ? tag[3].toLowerCase() : "";
+}
+
+/**
+ * True when this kind-1 event is a thread reply, using the same parent rule
+ * as the API (`ReplyParentEventID` / `thread_edges`): a `reply` marker, a
+ * `root` marker, or a legacy unmarked `#e` tag. Mention-only tags are quotes,
+ * not replies, and stay in recent notes.
+ */
+export function isAuthoredReplyEvent(event: EventRecord): boolean {
+  const tags = event.tags;
+  if (!Array.isArray(tags)) return false;
+  let hasReply = false;
+  let hasRoot = false;
+  let unmarked = 0;
+  for (const tag of tags) {
+    if (!Array.isArray(tag) || tag[0] !== "e") continue;
+    const referenced = typeof tag[1] === "string" ? tag[1].trim() : "";
+    if (!referenced) continue;
+    const marker = eventTagMarker(tag);
+    if (marker === "reply") hasReply = true;
+    else if (marker === "root") hasRoot = true;
+    else if (marker !== "mention") unmarked += 1;
+  }
+  if (hasReply || hasRoot) return true;
+  return unmarked > 0;
+}
+
+export function filterAuthoredNotes(events: EventRecord[]): EventRecord[] {
+  return events.filter((event) => {
+    if (typeof event.kind === "number" && AUTHORED_NOTE_EXCLUDED_KINDS.has(event.kind)) {
+      return false;
+    }
+    if (isAuthoredReplyEvent(event)) return false;
+    return true;
+  });
+}
+
+const MAX_PROFILE_FIELDS = 8;
+const MAX_PROFILE_FIELD_LENGTH = 200;
+
+/**
+ * Custom kind-0 `fields` arrive as `[label, value]` tuples. Anything that is
+ * not a pair of non-empty strings is dropped; the list is capped so a hostile
+ * profile cannot flood the hero.
+ */
+export function normalizeProfileFields(value: unknown): ProfileField[] | undefined {
+  const fields = asArray(value)
+    .map((entry): ProfileField | null => {
+      if (!Array.isArray(entry) || entry.length < 2) return null;
+      const label = asString(entry[0])?.trim();
+      const fieldValue = asString(entry[1])?.trim();
+      if (!label || !fieldValue) return null;
+      if (label.length > MAX_PROFILE_FIELD_LENGTH || fieldValue.length > MAX_PROFILE_FIELD_LENGTH) {
+        return null;
+      }
+      return [label, fieldValue];
+    })
+    .filter((entry): entry is ProfileField => entry !== null)
+    .slice(0, MAX_PROFILE_FIELDS);
+  return fields.length > 0 ? fields : undefined;
+}
+
+export function normalizeProfile(value: unknown): Profile | null {
+  const record = asRecord(value);
+  if (!record) return null;
+
+  const embeddedProfile = asRecord(record.profile);
+  const metadataRecord =
+    asRecord(record.metadata) ??
+    parseJsonRecord(record.metadata) ??
+    asRecord(embeddedProfile?.metadata) ??
+    parseJsonRecord(embeddedProfile?.metadata);
+  const metadataFromContent =
+    parseJsonRecord(record.content) ?? parseJsonRecord(embeddedProfile?.content);
+  const profilePayload = {
+    ...(metadataRecord ?? {}),
+    ...(metadataFromContent ?? {}),
+    ...(embeddedProfile ?? {}),
+    ...record,
+  };
+  const asProfileRecord = profilePayload as Record<string, unknown>;
+  const normalized = {
+    ...profilePayload,
+    pubkey:
+      firstString(
+        asProfileRecord.pubkey,
+        asProfileRecord.author_pubkey,
+        asProfileRecord.authorPubkey,
+        asProfileRecord.profile_pubkey,
+        asProfileRecord.profilePubkey,
+        asProfileRecord.user_pubkey,
+        asProfileRecord.userPubkey
+      ) ?? "",
+    npub: firstString(asProfileRecord.npub, asProfileRecord.npub_hex, asProfileRecord.npubHex),
+    display_name: firstString(
+      asProfileRecord.display_name,
+      asProfileRecord.displayName,
+      asProfileRecord.display,
+      asProfileRecord.displayname
+    ),
+    name: firstString(
+      asProfileRecord.name,
+      asProfileRecord.username,
+      asProfileRecord.user_name,
+      asProfileRecord.handle
+    ),
+    picture: firstString(
+      asProfileRecord.picture,
+      asProfileRecord.image,
+      asProfileRecord.avatar,
+      asProfileRecord.avatar_url,
+      asProfileRecord.avatarUrl,
+      asProfileRecord.pfp,
+      asProfileRecord.picture_url,
+      asProfileRecord.pictureUrl,
+      asProfileRecord.profile_image,
+      asProfileRecord.profile_picture
+    ),
+    about: firstString(asProfileRecord.about, asProfileRecord.description, asProfileRecord.bio),
+    nip05: firstString(asProfileRecord.nip05, asProfileRecord.nip_05),
+    lud16: firstString(asProfileRecord.lud16, asProfileRecord.lightning, asProfileRecord.lnurl),
+    website: firstString(
+      asProfileRecord.website,
+      asProfileRecord.url,
+      asProfileRecord.web,
+      asProfileRecord.homepage
+    ),
+    banner: firstString(asProfileRecord.banner, asProfileRecord.banner_url, asProfileRecord.cover),
+    bot: asBoolean(asProfileRecord.bot),
+    fields: normalizeProfileFields(asProfileRecord.fields),
+    ranking: normalizeDiscoveryRanking(asProfileRecord.ranking),
+    score: asNumber(asProfileRecord.score),
+    // Schema number fields reject null. Search suggestions send
+    // recent_activity_at: null when a profile has no activity timestamp,
+    // which was reported as schema drift on every suggest response.
+    recent_post_count: asNumber(asProfileRecord.recent_post_count),
+    recent_reply_count: asNumber(asProfileRecord.recent_reply_count),
+    recent_engagement_received: asNumber(asProfileRecord.recent_engagement_received),
+    recent_new_followers: asNumber(asProfileRecord.recent_new_followers),
+    recent_zap_volume_msats: asNumber(asProfileRecord.recent_zap_volume_msats),
+    recent_active_days: asNumber(asProfileRecord.recent_active_days),
+    recent_activity_at: asNumber(asProfileRecord.recent_activity_at),
+    follower_count: asNumber(asProfileRecord.follower_count),
+    capped_sats: asNumber(asProfileRecord.capped_sats),
+    sats_received: asNumber(asProfileRecord.sats_received),
+    supporter_count: asNumber(asProfileRecord.supporter_count),
+    viewer_follows: asBoolean(asProfileRecord.viewer_follows),
+  };
+
+  if (!normalized.pubkey) return null;
+  return parseEntityWithIdentity(profileSchema, normalized, "normalizeProfile", {
+    requireId: false,
+    requirePubkey: true,
+    strictHexPubkey: false,
+  }) as Profile | null;
+}
+
+export function normalizeProfiles(value: unknown): Profile[] {
+  return asArray(value)
+    .map((entry) => normalizeProfile(entry))
+    .filter((entry): entry is Profile => entry !== null && entry.pubkey.length > 0);
+}
+
+export function normalizeProfileStats(value: unknown): ProfileStats | undefined {
+  const record = asRecord(value);
+  if (!record) return undefined;
+
+  return compactDefined({
+    follower_count: asNumber(record.follower_count),
+    following_count: asNumber(record.following_count),
+    note_count: asNumber(record.note_count),
+    reply_count: asNumber(record.reply_count),
+    recent_activity_at: asNumber(record.recent_activity_at),
+    relay_count: asNumber(record.relay_count),
+  });
+}
+
+export function normalizeHashtagEntry(value: unknown): HashtagEntry | null {
+  if (typeof value === "string") {
+    return { hashtag: value };
+  }
+
+  const record = asRecord(value);
+  if (!record) return null;
+
+  return {
+    ...record,
+    hashtag: asString(record.hashtag),
+    count: asNumber(record.count) ?? asNumber(record.event_count),
+    ranking: normalizeDiscoveryRanking(record.ranking),
+  };
+}
+
+export function normalizeHashtagEntries(value: unknown): HashtagEntry[] {
+  return asArray(value)
+    .map((entry) => normalizeHashtagEntry(entry))
+    .filter((entry): entry is HashtagEntry => entry !== null);
+}
+
+export function normalizeDomainLabel(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim().toLowerCase();
+  if (trimmed.length === 0) return undefined;
+  const withoutTrailingPunctuation = trimmed.replace(/[),.;!?]+$/g, "");
+  const candidate = withoutTrailingPunctuation.includes("://")
+    ? withoutTrailingPunctuation
+    : `https://${withoutTrailingPunctuation}`;
+  try {
+    const hostname = new URL(candidate).hostname.toLowerCase().replace(/\.$/, "");
+    return hostname.length > 0 ? hostname : undefined;
+  } catch {
+    const fallbackHost = withoutTrailingPunctuation
+      .replace(/^https?:\/\//, "")
+      .replace(/^www\./, "")
+      .split("/")[0];
+    const fallback = (fallbackHost ?? "").replace(/\.$/, "");
+    return fallback.length > 0 ? fallback : undefined;
+  }
+}
+
+export function normalizeDomainEntry(value: unknown): DomainEntry | null {
+  if (typeof value === "string") {
+    const domain = normalizeDomainLabel(value);
+    return domain ? { domain } : null;
+  }
+
+  const record = asRecord(value);
+  if (!record) return null;
+
+  const domain =
+    normalizeDomainLabel(record.canonical_domain) ??
+    normalizeDomainLabel(record.domain) ??
+    normalizeDomainLabel(record.host) ??
+    normalizeDomainLabel(record.hostname) ??
+    normalizeDomainLabel(record.site) ??
+    normalizeDomainLabel(record.url);
+
+  return compactDefined({
+    ...record,
+    domain,
+    count: asNumber(record.count) ?? asNumber(record.event_count),
+    event_count: asNumber(record.event_count) ?? asNumber(record.count),
+    unique_authors: asNumber(record.unique_authors) ?? asNumber(record.unique_profiles),
+    ranking: normalizeDiscoveryRanking(record.ranking),
+  });
+}
+
+export function normalizeDomainEntries(value: unknown): DomainEntry[] {
+  const entries = asArray(value)
+    .map((entry) => normalizeDomainEntry(entry))
+    .filter((entry): entry is DomainEntry => entry !== null);
+
+  // Compatibility only for payloads produced before canonical discovery
+  // domains moved into the backend projection. Counts are never merged here.
+  const selected = new Map<string, DomainEntry>();
+  for (const entry of entries) {
+    const raw = entry.domain ?? "";
+    const withoutWWW = raw.replace(/^www\./, "");
+    const key = withoutWWW === "youtu.be" ? "youtube.com" : withoutWWW;
+    const current = selected.get(key);
+    const currentCount = current?.count ?? current?.event_count ?? 0;
+    const nextCount = entry.count ?? entry.event_count ?? 0;
+    if (!current || nextCount > currentCount) selected.set(key, entry);
+  }
+  return Array.from(selected.values());
+}

@@ -1,0 +1,429 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  filterAuthoredNotes,
+  isHiddenNoteKind,
+  isReadableNoteKind,
+  normalizeEventRecord,
+  normalizeEventRecords,
+  normalizeHashtagDetailResponse,
+  normalizeHashtagNotesResponse,
+  normalizeProfile,
+  normalizeThreadActivityResponse,
+} from "./normalize";
+import { profileLabel, profilePictureUrl } from "../../components/explorer/utils";
+import type { Profile } from "../types/api";
+import { hexToNpub, npubToHex } from "../nostr/npub";
+
+describe("normalizeProfile", () => {
+  it("maps camelCase identity aliases to canonical fields", () => {
+    const profile = normalizeProfile({
+      pubkey: "abc123",
+      displayName: "Alice",
+      image: "https://cdn.example.com/alice.jpg",
+      avatar_url: "https://cdn.example.com/unused.jpg",
+      username: "alice_user",
+      description: "nostr builder",
+      url: "https://alice.example.com",
+      nip_05: "_@alice.example.com",
+    });
+
+    expect(profile).not.toBeNull();
+    expect(profile?.pubkey).toBe("abc123");
+    expect(profile?.display_name).toBe("Alice");
+    expect(profile?.name).toBe("alice_user");
+    expect(profile?.picture).toBe("https://cdn.example.com/alice.jpg");
+    expect(profile?.about).toBe("nostr builder");
+    expect(profile?.website).toBe("https://alice.example.com");
+    expect(profile?.nip05).toBe("_@alice.example.com");
+  });
+
+  it("hydrates fields from stringified nostr metadata content", () => {
+    const profile = normalizeProfile({
+      pubkey: "def456",
+      content: JSON.stringify({
+        name: "bob",
+        display_name: "Bob",
+        picture: "https://cdn.example.com/bob.png",
+        about: "from content json",
+      }),
+    });
+
+    expect(profile).not.toBeNull();
+    expect(profile?.pubkey).toBe("def456");
+    expect(profile?.display_name).toBe("Bob");
+    expect(profile?.name).toBe("bob");
+    expect(profile?.picture).toBe("https://cdn.example.com/bob.png");
+    expect(profile?.about).toBe("from content json");
+  });
+
+  it("drops null numeric fields instead of failing the profile schema", () => {
+    const profile = normalizeProfile({
+      pubkey: "nullmetric",
+      display_name: "Null Metric",
+      follower_count: 4,
+      recent_activity_at: null,
+      recent_post_count: null,
+      recent_engagement_received: null,
+    });
+
+    expect(profile).not.toBeNull();
+    expect(profile?.follower_count).toBe(4);
+    expect(profile?.recent_activity_at).toBeUndefined();
+    expect(profile?.recent_post_count).toBeUndefined();
+  });
+
+  it("preserves discovery profile metrics from API payloads", () => {
+    const profile = normalizeProfile({
+      pubkey: "metric123",
+      display_name: "Metric Profile",
+      recent_new_followers: 14,
+      recent_engagement_received: 37,
+      recent_post_count: 9,
+    });
+
+    expect(profile).not.toBeNull();
+    expect(profile?.recent_new_followers).toBe(14);
+    expect(profile?.recent_engagement_received).toBe(37);
+    expect(profile?.recent_post_count).toBe(9);
+  });
+
+  it("merges nested metadata and profile wrappers", () => {
+    const profile = normalizeProfile({
+      profile: {
+        author_pubkey: "ffeedd",
+        metadata: JSON.stringify({
+          displayName: "Carol",
+          pfp: "https://cdn.example.com/carol.webp",
+          bio: "from metadata string",
+          homepage: "https://carol.example.com",
+        }),
+      },
+    });
+
+    expect(profile).not.toBeNull();
+    expect(profile?.pubkey).toBe("ffeedd");
+    expect(profile?.display_name).toBe("Carol");
+    expect(profile?.picture).toBe("https://cdn.example.com/carol.webp");
+    expect(profile?.about).toBe("from metadata string");
+    expect(profile?.website).toBe("https://carol.example.com");
+  });
+
+  it("gracefully ignores invalid JSON metadata/content", () => {
+    expect(() =>
+      normalizeProfile({
+        pubkey: "112233",
+        content: "{not-json",
+        metadata: "{also-not-json",
+        displayName: "Fallback Name",
+        avatar_url: "https://cdn.example.com/fallback.png",
+      })
+    ).not.toThrow();
+
+    const profile = normalizeProfile({
+      pubkey: "112233",
+      content: "{not-json",
+      metadata: "{also-not-json",
+      displayName: "Fallback Name",
+      avatar_url: "https://cdn.example.com/fallback.png",
+    });
+
+    expect(profile).not.toBeNull();
+    expect(profile?.pubkey).toBe("112233");
+    expect(profile?.display_name).toBe("Fallback Name");
+    expect(profile?.picture).toBe("https://cdn.example.com/fallback.png");
+  });
+});
+
+describe("normalizeEventRecord", () => {
+  it("lifts nested counts aliases to top-level engagement fields", () => {
+    const eventId = "ab".repeat(32);
+    const note = normalizeEventRecord({
+      event_id: eventId,
+      author_pubkey: "pubkey_abc",
+      content: "hello nostr",
+      counts: {
+        reply_count: 3,
+        reaction_count: 5,
+        repost_count: 2,
+        quote_count: 3,
+        zap_count: 7,
+        zap_msats: 42000,
+      },
+    });
+
+    expect(note).not.toBeNull();
+    expect(note?.id).toBe(eventId);
+    expect(note?.pubkey).toBe("pubkey_abc");
+    expect(note?.reply_count).toBe(3);
+    expect(note?.reaction_count).toBe(5);
+    expect(note?.repost_count).toBe(2);
+    expect(note?.quote_count).toBe(3);
+    expect(note?.zap_count).toBe(7);
+    expect(note?.zap_msats).toBe(42000);
+  });
+
+  it("drops records without a hex64 identity", () => {
+    expect(normalizeEventRecord({ event_id: "not-hex", content: "x" })).toBeNull();
+    expect(normalizeEventRecord({ content: "missing id" })).toBeNull();
+  });
+});
+
+describe("isHiddenNoteKind", () => {
+  it("hides contact lists, mute lists, and other empty-body list kinds", () => {
+    expect(isHiddenNoteKind({ kind: 3 })).toBe(true);
+    expect(isHiddenNoteKind({ kind: 10000 })).toBe(true);
+    expect(isHiddenNoteKind({ kind: 10002 })).toBe(true);
+    expect(isHiddenNoteKind({ kind: 30000 })).toBe(true);
+    expect(isHiddenNoteKind({ kind: 30001 })).toBe(true);
+    expect(isHiddenNoteKind({ kind: 1111 })).toBe(true);
+    expect(isHiddenNoteKind({ kind: 1984 })).toBe(true);
+    expect(isReadableNoteKind({ kind: 1111 })).toBe(true);
+    expect(isReadableNoteKind({ kind: 1 })).toBe(true);
+    expect(isReadableNoteKind({ kind: 1984 })).toBe(false);
+    expect(isHiddenNoteKind({ kind: 1 })).toBe(false);
+    expect(isHiddenNoteKind({ kind: 30023 })).toBe(false);
+    expect(isHiddenNoteKind(null)).toBe(false);
+  });
+});
+
+describe("normalizeEventRecords", () => {
+  it("drops empty-body list kinds from note lists", () => {
+    const noteId = "ab".repeat(32);
+    const contactId = "cd".repeat(32);
+    const muteId = "ef".repeat(32);
+    const notes = normalizeEventRecords([
+      { id: noteId, kind: 1, content: "hello" },
+      { id: contactId, kind: 3, content: "" },
+      { id: muteId, kind: 10000, content: "" },
+    ]);
+    expect(notes.map((note) => note.id)).toEqual([noteId]);
+  });
+});
+
+describe("profile display helpers", () => {
+  it("resolves alias display names and normalizes schemeless picture urls", () => {
+    const profile = {
+      pubkey: "abc",
+      displayName: "Alias Display",
+      image: "//cdn.example.com/pfp.png",
+    } as const;
+
+    expect(profileLabel(profile)).toBe("Alias Display");
+    expect(profilePictureUrl(profile)).toBe("https://cdn.example.com/pfp.png");
+  });
+
+  it("rejects unsupported image protocols", () => {
+    const profile = {
+      pubkey: "def",
+      picture: "javascript:alert(1)",
+    } as const;
+
+    expect(profilePictureUrl(profile)).toBeNull();
+  });
+
+  it("resolves identity fields from nested profile wrappers", () => {
+    const profile = {
+      profile: {
+        profile_pubkey: "001122",
+        content: {
+          display_name: "Nested Display",
+          picture: "https://cdn.example.com/nested.png",
+        },
+      },
+    } as unknown as Profile;
+
+    expect(profileLabel(profile)).toBe("Nested Display");
+    expect(profilePictureUrl(profile)).toBe("https://cdn.example.com/nested.png");
+  });
+
+  it("formats pubkey fallback label as npub when possible", () => {
+    const pubkey = "2d9873b25bf2dda6141684d44d5eb76af59f167788a58e363ab1671fefee87f2";
+    const profile = { pubkey } as Profile;
+    const label = profileLabel(profile);
+    expect(label.startsWith("npub1")).toBe(true);
+    expect(label.includes("…")).toBe(true);
+  });
+});
+
+describe("filterAuthoredNotes", () => {
+  it("removes reactions, zaps, reposts, metadata, and contact lists from authored note feeds", () => {
+    const filtered = filterAuthoredNotes([
+      { id: "note-1", kind: 1, content: "hello" },
+      { id: "reaction-1", kind: 7, content: "+" },
+      { id: "zap-1", kind: 9735, content: "" },
+      { id: "repost-1", kind: 6, content: "" },
+      { id: "meta-1", kind: 0, content: "{}" },
+      { id: "contacts-1", kind: 3, content: "" },
+      { id: "mutes-1", kind: 10000, content: "" },
+    ]);
+
+    expect(filtered.map((event) => event.id)).toEqual(["note-1"]);
+  });
+
+  it("removes reply events from authored note feeds", () => {
+    const filtered = filterAuthoredNotes([
+      { id: "note-1", kind: 1, content: "top-level note" },
+      {
+        id: "reply-1",
+        kind: 1,
+        content: "a reply",
+        tags: [
+          ["e", "root-id", "", "root"],
+          ["e", "reply-to-id", "", "reply"],
+        ],
+      },
+      {
+        id: "quote-root-1",
+        kind: 1,
+        content: "quoted share",
+        tags: [["e", "root-id", "", "root"]],
+      },
+      {
+        id: "reply-root-marker",
+        kind: 1,
+        content: "Doug. I've missed you.",
+        tags: [["e", "d".repeat(64), "wss://nostrelites.org/", "root", "b".repeat(64)]],
+      },
+    ]);
+
+    expect(filtered.map((event) => event.id)).toEqual(["note-1"]);
+  });
+
+  it("keeps mention-only quotes in authored note feeds", () => {
+    const filtered = filterAuthoredNotes([
+      {
+        id: "quote-1",
+        kind: 1,
+        content: "gm nostr:nevent1example",
+        tags: [["e", "quoted-id", "", "mention"]],
+      },
+      {
+        id: "legacy-reply",
+        kind: 1,
+        content: "reply without a marker",
+        tags: [["e", "parent-id"]],
+      },
+    ]);
+
+    expect(filtered.map((event) => event.id)).toEqual(["quote-1"]);
+  });
+});
+
+describe("normalizeAuthorZapsResponse", () => {
+  it("maps authored zap receipt events into zap activity records", async () => {
+    const { normalizeAuthorZapsResponse } = await import("./normalize");
+    const payload = normalizeAuthorZapsResponse({
+      zaps: [
+        {
+          id: "cd".repeat(32),
+          kind: 9735,
+          pubkey: "sender-pubkey",
+          created_at: 1_700_000_000,
+          content: "",
+          tags: [
+            ["p", "receiver-pubkey"],
+            ["e", "ef".repeat(32)],
+            [
+              "description",
+              JSON.stringify({
+                content: "great post",
+                tags: [["amount", "21000"]],
+              }),
+            ],
+          ],
+        },
+      ],
+    });
+
+    expect(payload.zaps?.[0]?.sender_pubkey).toBe("sender-pubkey");
+    expect(payload.zaps?.[0]?.target_event_id).toBe("ef".repeat(32));
+    expect(payload.zaps?.[0]?.sats).toBe(21);
+    expect(payload.zaps?.[0]?.zap_text).toBe("great post");
+  });
+});
+
+describe("npub helpers", () => {
+  it("round-trips hex pubkey through npub encoding", () => {
+    const pubkey = "2d9873b25bf2dda6141684d44d5eb76af59f167788a58e363ab1671fefee87f2";
+    const npub = hexToNpub(pubkey);
+    expect(npub).not.toBeNull();
+    expect(npubToHex(npub ?? "")).toBe(pubkey);
+  });
+});
+
+describe("normalizeThreadActivityResponse", () => {
+  it("lifts hotspot counts when activity is an object", () => {
+    const payload = normalizeThreadActivityResponse({
+      root_event_id: "ab".repeat(32),
+      participant_count: 69,
+      activity: { replies_24h: 22, replies_7d: 40 },
+    });
+
+    expect(payload.activity).toEqual([]);
+    expect(payload.replies_24h).toBe(22);
+    expect(payload.replies_7d).toBe(40);
+    expect(payload.participant_count).toBe(69);
+  });
+
+  it("still treats an activity array as events", () => {
+    const payload = normalizeThreadActivityResponse({
+      activity: [{ id: "ab".repeat(32), pubkey: "cd".repeat(32), kind: 1, content: "hi" }],
+    });
+
+    expect(payload.activity).toHaveLength(1);
+    expect(payload.replies_24h).toBeUndefined();
+  });
+});
+
+describe("normalizeHashtagDetailResponse", () => {
+  it("maps nested summary activity counts into mentions and unique authors", () => {
+    const payload = normalizeHashtagDetailResponse({
+      hashtag: "nostr",
+      activity: {
+        "24h": { event_count: 312, unique_authors: 120 },
+        all: { event_count: 4821, unique_authors: 950 },
+      },
+    });
+
+    expect(payload.count).toBe(4821);
+    expect(payload.event_count).toBe(4821);
+    expect(payload.unique_authors).toBe(950);
+  });
+
+  it("prefers explicit top-level counts over activity", () => {
+    const payload = normalizeHashtagDetailResponse({
+      hashtag: "nostr",
+      count: 7,
+      unique_authors: 3,
+      activity: { all: { event_count: 4821, unique_authors: 950 } },
+    });
+
+    expect(payload.count).toBe(7);
+    expect(payload.unique_authors).toBe(3);
+  });
+});
+
+describe("normalizeHashtagNotesResponse", () => {
+  it("does not fabricate a total from the returned page size", () => {
+    const payload = normalizeHashtagNotesResponse({
+      hashtag: "nostr",
+      notes: [{ id: "ab".repeat(32), pubkey: "cd".repeat(32), kind: 1, content: "hi" }],
+    });
+
+    expect(payload.total).toBeUndefined();
+    expect(payload.notes).toHaveLength(1);
+  });
+
+  it("keeps a backend-reported total and next_cursor", () => {
+    const payload = normalizeHashtagNotesResponse({
+      hashtag: "nostr",
+      notes: [],
+      total: 4821,
+      next_cursor: "opaque_token",
+    });
+
+    expect(payload.total).toBe(4821);
+    expect(payload.next_cursor).toBe("opaque_token");
+  });
+});

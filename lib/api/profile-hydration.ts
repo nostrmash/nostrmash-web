@@ -1,0 +1,203 @@
+import { getEventsBatch, getProfile, getProfilesBatch } from "@/lib/api/endpoints";
+import type { CacheClass } from "@/lib/caching/policies";
+import type { EventRecord, Profile } from "@/lib/types/api";
+
+export type ProfilesByPubkey = Record<string, Profile>;
+
+export function listHydratablePubkeys(pubkeys: Array<string | null | undefined>): string[] {
+  return Array.from(
+    new Set(
+      pubkeys
+        .filter((pubkey): pubkey is string => typeof pubkey === "string" && pubkey.length > 0)
+        .map((pubkey) => pubkey.toLowerCase())
+    )
+  );
+}
+
+export function mapProfilesByPubkey(profiles: Profile[]): ProfilesByPubkey {
+  return Object.fromEntries(
+    profiles
+      .filter((profile) => typeof profile.pubkey === "string" && profile.pubkey.length > 0)
+      .map((profile) => [profile.pubkey.toLowerCase(), profile])
+  );
+}
+
+export function hasRichIdentity(profile: Profile | undefined): boolean {
+  if (!profile) return false;
+  const fields = [
+    profile.display_name,
+    profile.name,
+    profile.picture,
+    profile.about,
+    profile.nip05,
+  ];
+  return fields.some((value) => typeof value === "string" && value.trim().length > 0);
+}
+
+export function hasProfilePicture(profile: Profile | undefined): boolean {
+  return typeof profile?.picture === "string" && profile.picture.trim().length > 0;
+}
+
+/**
+ * Search rows often already have a name, which counts as a rich identity, while
+ * the picture still lives only on the profile service. Avatars need that fetch.
+ */
+function needsProfileHydration(profile: Profile | undefined): boolean {
+  return !hasRichIdentity(profile) || !hasProfilePicture(profile);
+}
+
+export async function fetchProfilesByPubkey(
+  pubkeys: Array<string | null | undefined>,
+  cacheClass: CacheClass = "shortTtl"
+): Promise<ProfilesByPubkey> {
+  const normalizedPubkeys = listHydratablePubkeys(pubkeys);
+  if (normalizedPubkeys.length === 0) return {};
+  const profiles = await getProfilesBatch(normalizedPubkeys, cacheClass);
+  const hydratedByPubkey = mapProfilesByPubkey(profiles);
+  const missingOrSparsePubkeys = normalizedPubkeys.filter((pubkey) =>
+    needsProfileHydration(hydratedByPubkey[pubkey])
+  );
+
+  if (missingOrSparsePubkeys.length === 0) {
+    return hydratedByPubkey;
+  }
+
+  const fallbackProfiles = await Promise.allSettled(
+    missingOrSparsePubkeys.map((pubkey) => getProfile(pubkey, cacheClass))
+  );
+  for (const result of fallbackProfiles) {
+    if (result.status !== "fulfilled") continue;
+    const profile = result.value;
+    if (typeof profile.pubkey !== "string" || profile.pubkey.length === 0) continue;
+    const key = profile.pubkey.toLowerCase();
+    const existing = hydratedByPubkey[key];
+    hydratedByPubkey[key] = existing ? mergeHydratedProfile(existing, profile) : profile;
+  }
+
+  return hydratedByPubkey;
+}
+
+export async function hydrateProfiles(
+  profiles: Profile[],
+  cacheClass: CacheClass = "shortTtl"
+): Promise<Profile[]> {
+  if (profiles.length === 0) return [];
+  const sparseProfiles = profiles.filter((profile) => needsProfileHydration(profile));
+  if (sparseProfiles.length === 0) {
+    return profiles;
+  }
+  const hydratedByPubkey = await fetchProfilesByPubkey(
+    sparseProfiles.map((profile) => profile.pubkey),
+    cacheClass
+  );
+  const hydratedByNpub: Record<string, Profile> = Object.fromEntries(
+    Object.values(hydratedByPubkey)
+      .filter((profile) => typeof profile.npub === "string" && profile.npub.length > 0)
+      .map((profile) => [profile.npub!.toLowerCase(), profile])
+  );
+
+  const npubOnlyIdentifiers = Array.from(
+    new Set(
+      sparseProfiles
+        .filter((profile) => {
+          const hasPubkey = typeof profile.pubkey === "string" && profile.pubkey.length > 0;
+          const hasNpub = typeof profile.npub === "string" && profile.npub.length > 0;
+          return !hasPubkey && hasNpub;
+        })
+        .map((profile) => profile.npub!.toLowerCase())
+    )
+  );
+  if (npubOnlyIdentifiers.length > 0) {
+    const npubHydrationResults = await Promise.allSettled(
+      npubOnlyIdentifiers.map((npub) => getProfile(npub, cacheClass))
+    );
+    for (const result of npubHydrationResults) {
+      if (result.status !== "fulfilled") continue;
+      const profile = result.value;
+      if (typeof profile.pubkey === "string" && profile.pubkey.length > 0) {
+        hydratedByPubkey[profile.pubkey.toLowerCase()] = profile;
+      }
+      if (typeof profile.npub === "string" && profile.npub.length > 0) {
+        hydratedByNpub[profile.npub.toLowerCase()] = profile;
+      }
+    }
+  }
+
+  return profiles.map((profile) => {
+    const key = typeof profile.pubkey === "string" ? profile.pubkey.toLowerCase() : "";
+    const npubKey = typeof profile.npub === "string" ? profile.npub.toLowerCase() : "";
+    const hydrated =
+      (key ? hydratedByPubkey[key] : undefined) ?? (npubKey ? hydratedByNpub[npubKey] : undefined);
+    return mergeHydratedProfile(profile, hydrated);
+  });
+}
+
+const RANKING_METRIC_KEYS = [
+  "score",
+  "follower_count",
+  "capped_sats",
+  "sats_received",
+  "supporter_count",
+  "recent_zap_volume_msats",
+] as const satisfies readonly (keyof Profile)[];
+
+/**
+ * Identity hydration must not replace the numbers the ranking sorted by.
+ * A profile-service row can carry a different follower count or zap total.
+ */
+export function restoreRankingMetrics(ranked: Profile, hydrated: Profile): Profile {
+  const next: Profile = { ...hydrated, ranking: ranked.ranking ?? hydrated.ranking };
+  for (const key of RANKING_METRIC_KEYS) {
+    if (ranked[key] !== undefined) next[key] = ranked[key];
+  }
+  if (ranked.viewer_follows === true) next.viewer_follows = true;
+  return next;
+}
+
+/**
+ * Fill in a display name and avatar without dropping the discovery ranking.
+ * A profile-service record has no `ranking`, and spreading it over the
+ * discovery row used to erase the reason the person is on the page.
+ */
+export function mergeHydratedProfile(ranked: Profile, hydrated?: Profile): Profile {
+  if (!hydrated) return ranked;
+  const identity = Object.fromEntries(
+    Object.entries(hydrated).filter(([, value]) => value !== undefined && value !== null)
+  ) as Partial<Profile>;
+  return {
+    ...ranked,
+    ...identity,
+    ranking: ranked.ranking ?? hydrated.ranking,
+  };
+}
+
+export function extractEventAuthorPubkeys(notes: EventRecord[]): string[] {
+  return listHydratablePubkeys(notes.map((note) => note.pubkey));
+}
+
+export async function fetchEventsById(
+  eventIds: Array<string | null | undefined>,
+  cacheClass: CacheClass = "shortTtl"
+): Promise<Record<string, EventRecord>> {
+  const normalizedIds = Array.from(
+    new Set(
+      eventIds.filter(
+        (eventId): eventId is string => typeof eventId === "string" && eventId.length > 0
+      )
+    )
+  );
+  if (normalizedIds.length === 0) return {};
+
+  try {
+    const { events } = await getEventsBatch(normalizedIds, cacheClass);
+    const eventsById: Record<string, EventRecord> = {};
+    for (const event of events) {
+      if (typeof event.id === "string" && event.id.length > 0) {
+        eventsById[event.id.toLowerCase()] = event;
+      }
+    }
+    return eventsById;
+  } catch {
+    return {};
+  }
+}

@@ -1,0 +1,184 @@
+"use client";
+
+import Link from "@/components/app-link";
+import { useRouter } from "next/navigation";
+import {
+  useLayoutEffect,
+  useRef,
+  useState,
+  useTransition,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
+
+import { NotesListSkeleton } from "@/components/ui/skeleton";
+import { TabBar, TabLinkContent } from "@/components/ui/tabs";
+import { tabLinkPrefetch, type TabBarOverflow, type TabItem } from "@/components/ui/tab-styles";
+
+const SITE_HEADER_SELECTOR = "header.sticky";
+/** py-2 + the min-h-11 header row + border, until the header is measured. */
+const SITE_HEADER_OFFSET_FALLBACK = "calc(3.75rem + 1px)";
+
+function useSiteHeaderOffset(): string {
+  const [offset, setOffset] = useState(SITE_HEADER_OFFSET_FALLBACK);
+
+  useLayoutEffect(() => {
+    const header = document.querySelector(SITE_HEADER_SELECTOR);
+    if (!(header instanceof HTMLElement)) return;
+
+    const apply = () => {
+      const height = header.getBoundingClientRect().height;
+      if (height <= 0) return;
+      const dpr = window.devicePixelRatio || 1;
+      // Snap up to a device pixel so a fraction cannot leave a slit.
+      const snapped = Math.ceil(height * dpr) / dpr;
+      const next = `${snapped}px`;
+      setOffset((current) => (current === next ? current : next));
+    };
+
+    apply();
+    const observer = new ResizeObserver(apply);
+    observer.observe(header);
+    return () => observer.disconnect();
+  }, []);
+
+  return offset;
+}
+
+function restoreProfileTabScroll(savedY: number) {
+  const maxY = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+  const y = Math.min(savedY, maxY);
+  if (Math.abs(window.scrollY - y) > 1) window.scrollTo(0, y);
+
+  const section = document.getElementById("profile-activity");
+  const header = document.querySelector(SITE_HEADER_SELECTOR);
+  if (section && savedY > maxY + 8 && header instanceof HTMLElement) {
+    const headerBottom = header.getBoundingClientRect().bottom;
+    const sectionTop = section.getBoundingClientRect().top;
+    if (sectionTop > headerBottom + 8) {
+      window.scrollTo(0, window.scrollY + sectionTop - headerBottom - 8);
+    }
+  }
+
+  const panel = document.querySelector("[data-testid='profile-activity-panel']");
+  const bar = document.querySelector("[data-testid='profile-activity-tab-bar']");
+  if (!(panel instanceof HTMLElement) || !(bar instanceof HTMLElement)) return;
+  const overlap = bar.getBoundingClientRect().bottom - panel.getBoundingClientRect().top;
+  if (overlap > 0 && overlap < 48) window.scrollBy(0, -overlap - 8);
+}
+
+function isPlainLeftClick(event: MouseEvent<HTMLAnchorElement>): boolean {
+  return (
+    !event.defaultPrevented &&
+    event.button === 0 &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.shiftKey &&
+    !event.altKey
+  );
+}
+
+/**
+ * Tab bar for the profile activity section. Tabs stay URL-driven (server
+ * renders the selected list), but switching runs inside a React transition:
+ * the clicked tab highlights immediately, the panel shows a skeleton while
+ * the server payload streams in, and the page does not scroll. Modifier and
+ * middle clicks fall through to the browser so "open in new tab" still works.
+ *
+ * The profile route is dynamic and has no loading boundary, so a plain link
+ * does not prefetch it. Inactive tabs request the full page first; the
+ * replace below then paints from that cache.
+ */
+export function ProfileActivityTabBar({
+  items,
+  overflow,
+  activeKey,
+  ariaLabel,
+  children,
+}: {
+  items: TabItem[];
+  overflow?: TabBarOverflow;
+  /** Server-decided active tab key. */
+  activeKey: string;
+  ariaLabel?: string;
+  /** The server-rendered panel for `activeKey`. */
+  children: ReactNode;
+}) {
+  const router = useRouter();
+  const headerOffset = useSiteHeaderOffset();
+  const [isPending, startTransition] = useTransition();
+  const [optimisticKey, setOptimisticKey] = useState<string | null>(null);
+  const savedScrollY = useRef<number | null>(null);
+
+  useLayoutEffect(() => {
+    if (isPending || savedScrollY.current == null) return;
+    const saved = savedScrollY.current;
+    const apply = () => {
+      if (savedScrollY.current !== saved) return;
+      restoreProfileTabScroll(saved);
+    };
+    apply();
+    const frame = requestAnimationFrame(() => {
+      apply();
+      if (savedScrollY.current === saved) savedScrollY.current = null;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [isPending, activeKey]);
+
+  // While a transition is in flight the clicked tab is shown as active; once
+  // the server payload lands, isPending drops and the real key takes over.
+  const effectiveActive = isPending && optimisticKey ? optimisticKey : activeKey;
+  const decorate = (tabs: TabItem[]) =>
+    tabs.map((tab) => ({ ...tab, active: tab.key === effectiveActive }));
+
+  const select = (tab: TabItem) => (event: MouseEvent<HTMLAnchorElement>) => {
+    if (!isPlainLeftClick(event)) return;
+    if (tab.key === effectiveActive) {
+      event.preventDefault();
+      return;
+    }
+    event.preventDefault();
+    savedScrollY.current = window.scrollY;
+    setOptimisticKey(tab.key);
+    startTransition(() => {
+      router.replace(tab.href, { scroll: false });
+    });
+  };
+
+  return (
+    <>
+      <div
+        data-testid="profile-activity-tab-bar"
+        className="bg-background sticky z-30"
+        style={{ top: headerOffset }}
+      >
+        <TabBar
+          ariaLabel={ariaLabel}
+          items={decorate(items)}
+          overflow={overflow ? { ...overflow, items: decorate(overflow.items) } : undefined}
+          renderLink={(tab, className, options) => (
+            <Link
+              href={tab.href}
+              prefetch={tabLinkPrefetch(true, tab.active)}
+              onClick={select(tab)}
+              role={options?.role}
+              aria-current={tab.active ? "page" : undefined}
+              className={className}
+            >
+              <TabLinkContent tab={tab} />
+            </Link>
+          )}
+        />
+      </div>
+      <div
+        aria-busy={isPending || undefined}
+        aria-live="polite"
+        className="scroll-mt-28"
+        data-testid="profile-activity-panel"
+        data-pending={isPending ? "true" : undefined}
+      >
+        {isPending ? <NotesListSkeleton count={3} /> : children}
+      </div>
+    </>
+  );
+}

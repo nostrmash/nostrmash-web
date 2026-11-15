@@ -1,0 +1,388 @@
+import type { z } from "zod";
+
+import { ApiError } from "@/lib/api/errors";
+import { forwardableClientIp } from "@/lib/api/search-suggest-params";
+import {
+  buildLkgKey,
+  isLkgCacheClass,
+  isBoundedCachePath,
+  markStaleDataServed,
+  readLastKnownGood,
+  storeLastKnownGood,
+} from "@/lib/api/last-known-good";
+import { appConfig } from "@/lib/config";
+import { toNextFetchConfig, type CacheClass } from "@/lib/caching/policies";
+import { softParseApiPayload } from "@/lib/api/schemas/parse";
+import { captureApiError, isExpectedApiStatus, normalizeApiPath } from "@/lib/telemetry/sentry";
+import { traceApiCall } from "@/lib/telemetry/trace";
+import type { ApiErrorBody, ApiErrorDetails } from "@/lib/types/api";
+
+export { ApiError, isApiError } from "@/lib/api/errors";
+
+function initHeader(headers: HeadersInit | undefined, name: string): string | undefined {
+  if (!headers) return undefined;
+  const lower = name.toLowerCase();
+  if (typeof Headers !== "undefined" && headers instanceof Headers) {
+    return headers.get(lower) ?? undefined;
+  }
+  if (Array.isArray(headers)) {
+    const found = headers.find(([key]) => key.toLowerCase() === lower);
+    return found?.[1];
+  }
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === lower && typeof value === "string") return value;
+  }
+  return undefined;
+}
+
+// The API limits by client address. Server renders must send the visitor,
+// because Cloudflare otherwise stamps every worker subrequest with one
+// shared address and the whole site shares a single rate-limit bucket.
+async function visitorRateLimitHeaders(
+  explicit: HeadersInit | undefined
+): Promise<Record<string, string>> {
+  if (initHeader(explicit, "cf-connecting-ip") || initHeader(explicit, "x-forwarded-for")) {
+    return {};
+  }
+  if (typeof window !== "undefined") return {};
+  try {
+    const { headers } = await import("next/headers");
+    const incoming = await headers();
+    const ip = forwardableClientIp(
+      incoming.get("cf-connecting-ip") ?? incoming.get("x-forwarded-for")?.split(",")[0] ?? ""
+    );
+    if (!ip) return {};
+    return {
+      "X-Forwarded-For": ip,
+      "CF-Connecting-IP": ip,
+    };
+  } catch (error) {
+    // Static pages have no visitor. Swallowing the dynamic-usage bailout
+    // keeps this fetch from forcing every page to render dynamically.
+    if (!isRequestHeadersUnavailable(error)) throw error;
+    return {};
+  }
+}
+
+function isRequestHeadersUnavailable(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const digest = "digest" in error ? String((error as { digest?: unknown }).digest) : "";
+  if (digest.includes("DYNAMIC_SERVER_USAGE") || digest.includes("NEXT_")) return true;
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("dynamic server usage") ||
+    message.includes("outside a request scope") ||
+    message.includes("headers") ||
+    message.includes("requestasyncstorage") ||
+    message.includes("invariant")
+  );
+}
+
+export { getStaleDataNotice } from "@/lib/api/last-known-good";
+
+/** Light sampling/dedupe so a flapping upstream does not flood Sentry. */
+const recentApiErrorKeys = new Map<string, number>();
+const API_ERROR_DEDUP_MS = 60_000;
+/** Report at most ~10% of unexpected upstream failures per route/status. */
+const API_ERROR_SAMPLE_RATE = 0.1;
+
+function shouldReportApiError(key: string): boolean {
+  const now = Date.now();
+  const last = recentApiErrorKeys.get(key) ?? 0;
+  if (now - last < API_ERROR_DEDUP_MS) return false;
+  if (Math.random() > API_ERROR_SAMPLE_RATE) return false;
+  recentApiErrorKeys.set(key, now);
+  if (recentApiErrorKeys.size > 200) {
+    for (const [entryKey, seenAt] of recentApiErrorKeys) {
+      if (now - seenAt > API_ERROR_DEDUP_MS) recentApiErrorKeys.delete(entryKey);
+    }
+  }
+  return true;
+}
+
+function reportUpstreamFailure(error: unknown, path: string, requestId?: string) {
+  const status =
+    error instanceof ApiError ? error.status : isApiTimeoutError(error) ? 408 : undefined;
+
+  // Soft-handled page loaders already absorb 404/429; recording them as issues
+  // flooded Sentry after observability wiring (and inflated Cloudflare error counts).
+  if (error instanceof ApiError && isExpectedApiStatus(error.status)) {
+    captureApiError(error, { path, requestId, kind: "expected" });
+    return;
+  }
+
+  const route = normalizeApiPath(path);
+  const key = `${route}:${status ?? "network"}`;
+  if (!shouldReportApiError(key)) return;
+
+  const isTimeout = isApiTimeoutError(error);
+  captureApiError(error, {
+    path: route,
+    requestId,
+    kind: isTimeout ? "timeout" : "upstream",
+    level: isTimeout || (typeof status === "number" && status < 500) ? "warning" : "error",
+  });
+}
+
+function createOutboundRequestId(): string {
+  try {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+      return crypto.randomUUID();
+    }
+  } catch {
+    // fall through
+  }
+  return `nm-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/** Bound upstream waits so SSR pages cannot hang indefinitely when the API is slow. */
+const DEFAULT_TIMEOUT_MS: Record<CacheClass, number> = {
+  static: 12_000,
+  shortTtl: 8_000,
+  requestTime: 10_000,
+};
+
+/** Backoffs between retries of subrequests that hit a Cloudflare challenge. */
+const CHALLENGE_RETRY_DELAYS_MS = [150, 400];
+
+/**
+ * Bot Fight Mode intermittently issues managed challenges to this worker's
+ * own API subrequests (it scores Workers egress as bot traffic and cannot be
+ * skipped by custom WAF rules on the free plan). A challenge page is not a
+ * real API 403.
+ */
+function isEdgeChallengeResponse(response: Response): boolean {
+  return response.status === 403 && response.headers.get("cf-mitigated") === "challenge";
+}
+
+function buildApiUrl(path: string, query?: URLSearchParams): string {
+  const base = appConfig.apiBaseUrl.endsWith("/")
+    ? appConfig.apiBaseUrl.slice(0, -1)
+    : appConfig.apiBaseUrl;
+  const suffix = path.startsWith("/") ? path : `/${path}`;
+  const url = new URL(`${base}${suffix}`);
+  if (query) {
+    url.search = query.toString();
+  }
+  return url.toString();
+}
+
+function formatErrorDetails(details: ApiErrorDetails): string {
+  const message = typeof details.message === "string" ? details.message : undefined;
+  const code = typeof details.code === "string" ? details.code : undefined;
+  // Keep request_id on ApiError.requestId for Sentry — never embed it in the
+  // human-facing message string (it was leaking into ErrorPanels).
+  return message ?? code ?? "Unknown API error";
+}
+
+function formatErrorValue(
+  value: ApiErrorBody["error"] | ApiErrorBody["message"]
+): string | undefined {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value && typeof value === "object") {
+    return formatErrorDetails(value);
+  }
+  return undefined;
+}
+
+function parseErrorMessage(body: ApiErrorBody | undefined, statusText: string): string {
+  if (!body) {
+    return statusText || "Unknown API error";
+  }
+  const message =
+    formatErrorValue(body.message) ?? formatErrorValue(body.error) ?? body.code ?? statusText;
+  return message || "Unknown API error";
+}
+
+function normalizeErrorText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function isAbortError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const name = "name" in error ? String((error as { name?: unknown }).name) : "";
+  return name === "AbortError" || name === "TimeoutError";
+}
+
+export function isApiTimeoutError(error: unknown): boolean {
+  if (isAbortError(error)) return true;
+  if (!(error instanceof Error)) return false;
+  return /timed out|aborted|AbortError|TimeoutError/i.test(error.message);
+}
+
+function combineAbortSignals(signals: AbortSignal[]): AbortSignal {
+  const active = signals.filter((signal) => signal != null);
+  if (active.length === 0) {
+    return new AbortController().signal;
+  }
+  if (active.length === 1) {
+    return active[0]!;
+  }
+  const AbortSignalAny = (
+    AbortSignal as typeof AbortSignal & {
+      any?: (signals: AbortSignal[]) => AbortSignal;
+    }
+  ).any;
+  if (typeof AbortSignalAny === "function") {
+    return AbortSignalAny(active);
+  }
+  const controller = new AbortController();
+  const onAbort = () => controller.abort();
+  for (const signal of active) {
+    if (signal.aborted) {
+      controller.abort();
+      break;
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+  }
+  return controller.signal;
+}
+
+export async function fetchApiJson<T>(
+  path: string,
+  options?: {
+    query?: Record<string, string | number | undefined>;
+    cacheClass?: CacheClass;
+    timeoutMs?: number;
+    init?: RequestInit;
+    schema?: z.ZodTypeAny;
+  }
+): Promise<T> {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(options?.query ?? {})) {
+    if (value !== undefined && value !== "") {
+      query.set(key, String(value));
+    }
+  }
+
+  const requestedCacheClass = options?.cacheClass ?? "requestTime";
+  // Central guard: durable caching (Next's fetch cache + LKG) persists to R2,
+  // a billed Class A write per entry. Only the bounded, shared endpoints in
+  // BOUNDED_CACHE_PATHS can ever amortize that write with later reads.
+  // Per-entity paths (notes/profiles/hashtags/domains by id, search) are an
+  // unbounded key space that scraper botnets — spoofed browser UAs across
+  // thousands of residential IPs, immune to robots.txt — walk at millions of
+  // unique keys per day, so caching them durably is a write-only bill.
+  // Enforcing this here (rather than at ~50 call sites) means new endpoints
+  // are safe by default.
+  const cacheClass: CacheClass =
+    requestedCacheClass !== "requestTime" && !isBoundedCachePath(path)
+      ? "requestTime"
+      : requestedCacheClass;
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS[cacheClass];
+  const timeoutSignal =
+    typeof AbortSignal.timeout === "function"
+      ? AbortSignal.timeout(timeoutMs)
+      : (() => {
+          const controller = new AbortController();
+          setTimeout(() => controller.abort(), timeoutMs);
+          return controller.signal;
+        })();
+  const signal = combineAbortSignals(
+    [timeoutSignal, options?.init?.signal].filter((value): value is AbortSignal => Boolean(value))
+  );
+
+  const outboundRequestId = createOutboundRequestId();
+  // The bounded-path guard above already downgraded unbounded paths to
+  // "requestTime", so a cacheable class here implies an LKG-worthy path.
+  const lkgKey = isLkgCacheClass(cacheClass) ? buildLkgKey(path, query) : null;
+
+  async function tryServeLastKnownGood(error: unknown): Promise<T> {
+    if (!lkgKey) throw error;
+    const entry = await readLastKnownGood(lkgKey);
+    if (!entry) throw error;
+    markStaleDataServed();
+    return entry.payload as T;
+  }
+
+  const performFetch = async () => {
+    const forwarded = await visitorRateLimitHeaders(options?.init?.headers);
+    return traceApiCall(`api:${path}`, async () =>
+      fetch(buildApiUrl(path, query), {
+        method: "GET",
+        ...toNextFetchConfig(cacheClass),
+        ...options?.init,
+        signal,
+        headers: {
+          Accept: "application/json",
+          "X-Request-Id": outboundRequestId,
+          ...forwarded,
+          ...(options?.init?.headers ?? {}),
+        },
+      })
+    );
+  };
+
+  let response: Response;
+  try {
+    response = await performFetch();
+    // Cloudflare Bot Fight Mode scores each of this worker's subrequests
+    // independently, so a challenged response is usually followed by a clean
+    // one. Retry briefly before falling through to LKG — per-entity paths
+    // (like hashtag notes) have no LKG entry, so without the retry a single
+    // challenge fails the whole section render.
+    for (const delayMs of CHALLENGE_RETRY_DELAYS_MS) {
+      if (!isEdgeChallengeResponse(response)) break;
+      try {
+        await response.body?.cancel();
+      } catch {
+        // ignore; the challenge body is small either way
+      }
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      response = await performFetch();
+    }
+  } catch (error) {
+    if (isAbortError(error)) {
+      const timeoutError = new Error(`API request timed out after ${timeoutMs}ms: ${path}`);
+      reportUpstreamFailure(timeoutError, path, outboundRequestId);
+      return tryServeLastKnownGood(timeoutError);
+    }
+    reportUpstreamFailure(error, path, outboundRequestId);
+    return tryServeLastKnownGood(error);
+  }
+
+  if (!response.ok) {
+    let errorBody: ApiErrorBody | undefined;
+    let errorText = "";
+    try {
+      const contentType = response.headers.get("content-type") ?? "";
+      if (contentType.includes("application/json")) {
+        errorBody = (await response.json()) as ApiErrorBody;
+      } else {
+        errorText = normalizeErrorText(await response.text());
+      }
+    } catch {
+      errorBody = undefined;
+    }
+
+    const message = parseErrorMessage(errorBody, response.statusText);
+    const details = errorText ? ` (${errorText.slice(0, 240)})` : "";
+    const apiError = ApiError.fromResponse(
+      response.status,
+      response.statusText,
+      path,
+      errorBody,
+      response.headers.get("x-request-id") ?? outboundRequestId,
+      `${message}${details}`
+    );
+    reportUpstreamFailure(apiError, path, apiError.requestId ?? outboundRequestId);
+
+    // Serve LKG for transient upstream failures (including challenges that
+    // survived the retry loop above); keep throwing for client/auth errors.
+    if (apiError.status === 429 || apiError.status >= 500 || isEdgeChallengeResponse(response)) {
+      return tryServeLastKnownGood(apiError);
+    }
+    throw apiError;
+  }
+
+  const json = (await response.json()) as T;
+  const parsed = options?.schema
+    ? (softParseApiPayload(options.schema, json, `api:${path}`) as T)
+    : json;
+  if (lkgKey) {
+    await storeLastKnownGood(lkgKey, parsed);
+  }
+  return parsed;
+}

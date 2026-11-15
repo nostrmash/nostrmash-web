@@ -1,0 +1,1049 @@
+import Link from "@/components/app-link";
+import type { ReactNode } from "react";
+
+import { CardHitTarget, cardHitTargetClassName } from "@/components/explorer/card-grammar";
+import { PostEngagement } from "@/components/explorer/post-engagement";
+import { TopZap } from "@/components/explorer/top-zap";
+import { ProfileAvatar } from "@/components/explorer/profile-avatar";
+import { Timestamp } from "@/components/explorer/timestamp";
+import {
+  mapDomainWhyNow,
+  mapHashtagWhyNow,
+  mapNoteWhyNow,
+  mapProfileWhyNow,
+  type WhyNowReason,
+} from "@/components/explorer/why-now";
+import { PersonalizationNote } from "@/components/discover/personalization-note";
+import { sharedTopicLine } from "@/lib/discover/stories";
+import { selectSupportingNotes } from "@/lib/discover/lead-notes";
+import { MEDIA_RANKINGS, type MediaLeaders } from "@/lib/discover/media-rankings";
+import { buildDiscoverHref, LANGUAGE_EMPTY_MESSAGE } from "@/lib/search-params/language";
+import { SourceFigure } from "@/components/explorer/source-figure";
+import {
+  postEngagementStats,
+  formatCompactNumber,
+  formatProfileSecondary,
+  normalizeDomainLabel,
+  noteAuthorIdentifier,
+  noteInlineAuthorProfile,
+  profileHref,
+  profileLabel,
+  profileSecondaryLabel,
+  truncateProfileLabel,
+} from "@/components/explorer/utils";
+import { EventKindSwitch } from "@/components/explorer/event-kind-switch";
+import { isLongFormEvent } from "@/components/explorer/article-meta";
+import { NoteLinkPreviews } from "@/components/explorer/note-link-previews";
+import { NoteMedia } from "@/components/explorer/note-media";
+import {
+  MentionedNoteCards,
+  NoteBody,
+  type NoteContentResolution,
+} from "@/components/explorer/note-content";
+import { fetchProfilesByPubkey } from "@/lib/api/profile-hydration";
+import { getEditorialNoteText } from "@/components/explorer/note-preview";
+import { isHiddenNoteKind } from "@/lib/api/normalize";
+import { GENERIC_REPOST_KIND, isLiveActivityKind, isMediaKind } from "@/lib/notes/kinds";
+import {
+  belowVolumeFloor,
+  listedVolume,
+  rankMovement,
+  reasonsBesideSourceFigure,
+} from "@/lib/discover/reasons";
+import { resolveContentReferences } from "@/lib/notes/resolve-content-refs";
+import {
+  ConversationZapRails,
+  FormatLeaders,
+  LiveStrip,
+  MoversColumn,
+} from "@/components/discover/overview/overview-rails";
+import { NetworkPulseStrip } from "@/components/home/network-pulse-strip";
+import type { HomeRails } from "@/lib/home/load-home-rails";
+import type { StatsWindow } from "@/lib/search-params/window";
+import type { CoverageNote } from "@/lib/stats/coverage-notes";
+import type {
+  DiscoveryItemRanking,
+  DomainEntry,
+  EventRecord,
+  HashtagEntry,
+  Personalization,
+  Profile,
+} from "@/lib/types/api";
+type PulseStat = {
+  label: string;
+  value: string | number | boolean;
+  series?: Array<{ t: number; v: number }>;
+  baseline?: {
+    metric?: string;
+    window?: string;
+    value?: number;
+    typical?: number;
+    typical_basis?: string;
+  } | null;
+};
+
+const INDEX_ROW_LIMIT = 6;
+const PROFILE_ROW_LIMIT = 4;
+const RANKED_LINK = "text-ink-faint hover:text-ink inline-flex min-h-6 items-center py-0.5 text-xs";
+
+function firstReason(reasons: WhyNowReason[]): WhyNowReason | null {
+  return reasons[0] ?? null;
+}
+
+/**
+ * One header grammar for every section: kicker, title, and an optional
+ * action link sat on the title's bottom edge.
+ */
+function SectionHeader({
+  kicker,
+  title,
+  headingId,
+  action,
+  display = false,
+  aside,
+  ranked,
+  compact = false,
+  lede,
+}: {
+  kicker: string;
+  title: string;
+  headingId: string;
+  action?: { href: string; label: string };
+  display?: boolean;
+  aside?: ReactNode;
+  /** Methodology anchor for this ranking. */
+  ranked?: string;
+  /** Smaller title so a narrow rail stays on one line. */
+  compact?: boolean;
+  lede?: string;
+}) {
+  const titleClass = compact
+    ? "font-display text-[1.35rem] leading-tight tracking-[-0.03em]"
+    : display
+      ? "nm-display-lg"
+      : "nm-title";
+  return (
+    <div className="min-w-0">
+      <div className="flex items-end justify-between gap-4">
+        <div className="min-w-0">
+          <p className="nm-kicker">{kicker}</p>
+          <h2 id={headingId} className={`${titleClass} text-ink mt-2`}>
+            {title}
+          </h2>
+        </div>
+        {action || ranked || aside ? (
+          <div className="mb-0.5 flex shrink-0 flex-col items-end gap-1">
+            {action ? (
+              <Link href={action.href} className="nm-action-link">
+                {action.label}
+              </Link>
+            ) : (
+              aside
+            )}
+            {ranked ? (
+              <Link href={ranked} className={RANKED_LINK}>
+                How this is ranked
+              </Link>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+      {lede ? <p className="text-ink-muted mt-2 max-w-md text-sm leading-5">{lede}</p> : null}
+    </div>
+  );
+}
+
+function EmptyRow({ children }: { children: ReactNode }) {
+  return <div className="border-edge/70 text-ink-muted mt-6 border-y py-8 text-sm">{children}</div>;
+}
+
+/** Rank movement since the previous computation; silent when unchanged or unknown. */
+function RankMovement({ ranking }: { ranking?: DiscoveryItemRanking }) {
+  const movement = rankMovement(ranking);
+  if (!movement) return null;
+  const up = movement.direction === "up";
+  return (
+    <span
+      className={`ml-2 inline-flex items-center gap-0.5 align-middle text-xs font-medium tabular-nums ${
+        up ? "text-accent-ink" : "text-ink-faint"
+      }`}
+      aria-label={`${up ? "Up" : "Down"} ${movement.places} ${movement.places === 1 ? "place" : "places"}`}
+    >
+      <span aria-hidden>{up ? "↑" : "↓"}</span>
+      {movement.places}
+    </span>
+  );
+}
+
+function EvidenceLine({
+  reasons,
+  ranking,
+  extra = [],
+  className = "mt-3",
+}: {
+  reasons: WhyNowReason[];
+  ranking?: DiscoveryItemRanking;
+  /** Additional qualifiers (e.g. author breadth) appended after the reason. */
+  extra?: Array<string | null | undefined>;
+  className?: string;
+}) {
+  const reason = firstReason(reasons);
+  const qualifiers = extra.filter((value): value is string => Boolean(value));
+  if (!reason && qualifiers.length === 0) return null;
+  return (
+    <p
+      className={`nm-evidence ${className}`}
+      title={ranking?.confidence ? `${ranking.confidence} confidence` : undefined}
+    >
+      <span className="text-ink-faint mr-2.5 font-semibold tracking-[0.1em] uppercase">
+        Why now
+      </span>
+      {reason ? <span className="text-ink-soft">{reason.text}</span> : null}
+      {reason?.support ? <span className="text-ink-muted"> · {reason.support}</span> : null}
+      {qualifiers.length > 0 ? (
+        <span className="text-ink-muted">
+          {reason ? " · " : ""}
+          {qualifiers.join(" · ")}
+        </span>
+      ) : null}
+    </p>
+  );
+}
+
+function noteId(note: EventRecord): string | null {
+  const candidate = note.id ?? note.event_id ?? note.eventId;
+  return typeof candidate === "string" && candidate.length > 0 ? candidate : null;
+}
+
+/** Fill a rail without repeating a note already shown higher on the page. */
+function takeUnseen(events: EventRecord[], seen: Set<string>, limit: number): EventRecord[] {
+  const rows: EventRecord[] = [];
+  for (const event of events) {
+    if (isHiddenNoteKind(event)) continue;
+    const id = noteId(event);
+    if (id && seen.has(id)) continue;
+    if (id) seen.add(id);
+    rows.push(event);
+    if (rows.length >= limit) break;
+  }
+  return rows;
+}
+
+function noteAuthor(note: EventRecord, authorsByPubkey: Record<string, Profile>) {
+  const inline = noteInlineAuthorProfile(note);
+  if (inline) return inline;
+  if (typeof note.pubkey !== "string") return undefined;
+  return authorsByPubkey[note.pubkey.toLowerCase()] ?? authorsByPubkey[note.pubkey];
+}
+
+function authorName(note: EventRecord, author?: Profile) {
+  return author ? profileLabel(author) : noteAuthorIdentifier(note);
+}
+
+function EditorialNote({
+  note,
+  rank,
+  authorsByPubkey,
+  lead = false,
+  contentResolution,
+}: {
+  note: EventRecord;
+  rank: number;
+  authorsByPubkey: Record<string, Profile>;
+  lead?: boolean;
+  contentResolution?: NoteContentResolution;
+}) {
+  if (isHiddenNoteKind(note)) return null;
+  const author = noteAuthor(note, authorsByPubkey);
+  if (
+    isMediaKind(note.kind) ||
+    isLiveActivityKind(note.kind) ||
+    note.kind === 6 ||
+    note.kind === GENERIC_REPOST_KIND ||
+    isLongFormEvent(note)
+  ) {
+    return (
+      <EventKindSwitch
+        event={note}
+        author={author}
+        surface="list"
+        rank={rank}
+        contentResolution={contentResolution}
+        profilesByPubkey={authorsByPubkey}
+        showUtilityLinks={false}
+      />
+    );
+  }
+  const id = noteId(note);
+  const editorialText = getEditorialNoteText(note, contentResolution);
+  const authorLabel = authorName(note, author);
+  const authorLink = profileHref(author, typeof note.pubkey === "string" ? note.pubkey : undefined);
+  const authorAvatarProfile =
+    author ??
+    (typeof note.pubkey === "string" && note.pubkey.length > 0 ? { pubkey: note.pubkey } : null);
+  const noteHref = id ? `/notes/${encodeURIComponent(id)}` : undefined;
+  const hasContent = typeof note.content === "string" && note.content.length > 0;
+
+  const rankMark = (
+    <span
+      className="text-ink-muted block text-xl leading-none font-medium tracking-[-0.05em]"
+      aria-label={`Rank ${rank}`}
+    >
+      {String(rank).padStart(2, "0")}
+    </span>
+  );
+
+  const authorRow = (
+    <div className="flex items-center gap-3">
+      {authorAvatarProfile ? (
+        <ProfileAvatar
+          profile={authorAvatarProfile}
+          size={lead ? 44 : 36}
+          alt={authorLabel}
+          href={authorLink}
+          className={`${lead ? "h-11 w-11" : "h-9 w-9"} border-edge rounded-full border object-cover`}
+        />
+      ) : null}
+      <div className="min-w-0">
+        {authorLink ? (
+          <Link
+            href={authorLink}
+            title={authorLabel}
+            className="text-ink block min-h-6 min-w-0 truncate py-0.5 text-sm leading-5 font-medium hover:underline"
+          >
+            {truncateProfileLabel(authorLabel)}
+          </Link>
+        ) : (
+          <p className="text-ink truncate text-sm font-medium" title={authorLabel}>
+            {truncateProfileLabel(authorLabel)}
+          </p>
+        )}
+        <Timestamp unixSeconds={note.created_at} className="nm-meta" />
+      </div>
+    </div>
+  );
+
+  if (lead) {
+    return (
+      <article className={`border-edge/70 border-t pt-5 ${noteHref ? cardHitTargetClassName : ""}`}>
+        {rankMark}
+        <div className="mt-3">{authorRow}</div>
+        {editorialText ? (
+          <NoteBody
+            content={editorialText}
+            tags={note.tags}
+            resolution={contentResolution}
+            className="text-ink-strong font-display mt-5 line-clamp-5 max-w-[40rem] text-[clamp(1.7rem,1.05rem+1.7vw,2.55rem)] leading-[1.28] tracking-[-0.032em] [overflow-wrap:anywhere]"
+            size="lead"
+          />
+        ) : null}
+        {hasContent ? (
+          <>
+            <div className="mt-4 max-w-32">
+              <NoteMedia content={note.content as string} tags={note.tags} variant="compact" />
+            </div>
+            <NoteLinkPreviews content={note.content as string} limit={1} />
+          </>
+        ) : null}
+        {hasContent ? (
+          <MentionedNoteCards
+            content={note.content as string}
+            tags={note.tags}
+            resolution={contentResolution}
+            className="mt-5 max-w-[44rem]"
+          />
+        ) : null}
+        <EvidenceLine reasons={mapNoteWhyNow(note)} ranking={note.ranking} />
+        <PostEngagement stats={postEngagementStats(note)} className="mt-2.5" />
+        <TopZap source={note} />
+        {noteHref ? (
+          <Link
+            href={noteHref}
+            className="nm-action-link mt-5 min-h-11 text-sm text-[var(--ink)] [text-decoration-color:var(--accent-soft)]"
+          >
+            Read the leading note
+          </Link>
+        ) : null}
+        {noteHref ? <CardHitTarget href={noteHref} label={`Open note by ${authorLabel}`} /> : null}
+      </article>
+    );
+  }
+
+  // Compact at every width: a square thumbnail beside the text, so a
+  // screenshot cannot outrank the lead note in the other column.
+  return (
+    <article
+      className={`border-edge/70 grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-4 border-t py-2.5 first:border-t-0 ${
+        noteHref ? cardHitTargetClassName : ""
+      }`}
+    >
+      <div className="min-w-0">
+        {rankMark}
+        <div className="mt-3">{authorRow}</div>
+        {editorialText ? (
+          <NoteBody
+            content={editorialText}
+            tags={note.tags}
+            resolution={contentResolution}
+            className="text-ink-soft mt-1 line-clamp-2 text-sm leading-5 [overflow-wrap:anywhere]"
+          />
+        ) : null}
+      </div>
+      {hasContent ? (
+        <div className="w-[5.5rem] max-w-full min-w-0 self-end overflow-hidden">
+          <NoteMedia content={note.content as string} variant="compact" />
+        </div>
+      ) : null}
+      <div className="col-span-2">
+        <EvidenceLine reasons={mapNoteWhyNow(note)} ranking={note.ranking} className="mt-1.5" />
+        <PostEngagement stats={postEngagementStats(note)} className="mt-1.5" />
+      </div>
+      {noteHref ? <CardHitTarget href={noteHref} label={`Open note by ${authorLabel}`} /> : null}
+    </article>
+  );
+}
+
+function scopedEmpty(lang: string | undefined, fallback: string): string {
+  return lang ? LANGUAGE_EMPTY_MESSAGE : fallback;
+}
+
+function ProfileRanking({
+  profiles,
+  degraded,
+  window,
+  lang,
+  viewer,
+  headingId = "profiles-in-motion",
+  kicker = "People",
+  title = "People gaining attention",
+  fullRankingHref,
+  rankedHref = "/methodology#people",
+  emptyMessage = "No clear profile movement.",
+  degradedMessage = "Profile movement is temporarily unavailable.",
+  namesOnly = false,
+  rowLimit = PROFILE_ROW_LIMIT,
+  compact = false,
+  lede,
+  className,
+}: {
+  profiles: Profile[];
+  degraded?: boolean;
+  window: StatsWindow;
+  lang?: string;
+  viewer?: string;
+  headingId?: string;
+  kicker?: string;
+  title?: string;
+  fullRankingHref?: string;
+  rankedHref?: string;
+  emptyMessage?: string;
+  degradedMessage?: string;
+  /** Name and handle only. The wide column keeps the evidence line. */
+  namesOnly?: boolean;
+  rowLimit?: number;
+  compact?: boolean;
+  lede?: string;
+  className?: string;
+}) {
+  return (
+    <section aria-labelledby={headingId} className={className}>
+      <SectionHeader
+        kicker={kicker}
+        title={title}
+        headingId={headingId}
+        compact={compact}
+        lede={lede}
+        action={{
+          href:
+            fullRankingHref ?? buildDiscoverHref("/trending/profiles", { window, lang, viewer }),
+          label: namesOnly ? "Full ranking" : "People index",
+        }}
+        ranked={compact ? undefined : rankedHref}
+      />
+      {profiles.length > 0 ? (
+        <ol className="border-edge/70 mt-6 divide-y divide-[var(--edge)] border-y">
+          {profiles.slice(0, rowLimit).map((profile, index) => {
+            const href = profileHref(profile);
+            const label = profileLabel(profile);
+            const secondary = profileSecondaryLabel(profile);
+            const secondaryText = secondary ? formatProfileSecondary(secondary) : "";
+            if (namesOnly) {
+              return (
+                <li
+                  key={profile.pubkey ?? profile.npub ?? index}
+                  className="flex items-center gap-3 py-2.5"
+                >
+                  <span className="text-accent-ink w-8 shrink-0 text-lg tabular-nums">
+                    {String(index + 1).padStart(2, "0")}
+                  </span>
+                  <ProfileAvatar
+                    profile={profile}
+                    size={36}
+                    href={href}
+                    className="border-edge h-9 w-9 shrink-0 rounded-full border object-cover"
+                  />
+                  <div className="min-w-0 flex-1">
+                    {href ? (
+                      <Link
+                        href={href}
+                        title={label}
+                        className="text-ink block truncate text-sm font-medium hover:underline"
+                      >
+                        {truncateProfileLabel(label)}
+                      </Link>
+                    ) : (
+                      <p className="text-ink truncate text-sm font-medium" title={label}>
+                        {truncateProfileLabel(label)}
+                      </p>
+                    )}
+                    {secondaryText ? (
+                      <p className="nm-meta truncate" title={secondary ?? undefined}>
+                        {secondaryText}
+                      </p>
+                    ) : null}
+                  </div>
+                  <RankMovement ranking={profile.ranking} />
+                </li>
+              );
+            }
+            return (
+              <li
+                key={profile.pubkey ?? profile.npub ?? index}
+                className="grid grid-cols-[2.5rem_2.75rem_minmax(0,1fr)] gap-3 py-3"
+              >
+                <span className="text-accent-ink pt-1 text-lg tabular-nums">
+                  {String(index + 1).padStart(2, "0")}
+                </span>
+                <ProfileAvatar
+                  profile={profile}
+                  size={44}
+                  href={href}
+                  className="border-edge h-11 w-11 rounded-full border object-cover"
+                />
+                <div className="min-w-0">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <div className="flex min-w-0 items-center">
+                      {href ? (
+                        <Link
+                          href={href}
+                          title={label}
+                          className="text-ink block min-w-0 truncate font-medium hover:underline"
+                        >
+                          {truncateProfileLabel(label)}
+                        </Link>
+                      ) : (
+                        <p className="text-ink truncate font-medium" title={label}>
+                          {truncateProfileLabel(label)}
+                        </p>
+                      )}
+                      <RankMovement ranking={profile.ranking} />
+                    </div>
+                    <SourceFigure ranking={profile.ranking} className="ml-auto" />
+                  </div>
+                  {secondaryText && href ? (
+                    <Link
+                      href={href}
+                      title={secondary ?? undefined}
+                      className="nm-meta hover:text-ink mt-0.5 block min-h-6 truncate py-0.5 text-[13px]"
+                    >
+                      {secondaryText}
+                    </Link>
+                  ) : secondaryText ? (
+                    <p className="nm-meta mt-0.5 truncate" title={secondary ?? undefined}>
+                      {secondaryText}
+                    </p>
+                  ) : null}
+                  <EvidenceLine reasons={mapProfileWhyNow(profile)} ranking={profile.ranking} />
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+      ) : (
+        <EmptyRow>{degraded ? degradedMessage : scopedEmpty(lang, emptyMessage)}</EmptyRow>
+      )}
+    </section>
+  );
+}
+
+type IndexRow = {
+  key: string;
+  href: string;
+  label: string;
+  reasons: WhyNowReason[];
+  ranking?: DiscoveryItemRanking;
+  extra?: Array<string | null>;
+  figureNoun?: string;
+};
+
+/** Ranked index shared by Topics and Links. Server order is the row order. */
+function RankedIndex({ rows }: { rows: IndexRow[] }) {
+  return (
+    <ol className="border-edge/70 mt-6 divide-y divide-[var(--edge)] border-y">
+      {rows.map((row, index) => (
+        <li key={row.key} className="grid grid-cols-[2.5rem_minmax(0,1fr)] gap-3 py-4">
+          <span className="text-accent-ink pt-0.5 text-lg tabular-nums">
+            {String(index + 1).padStart(2, "0")}
+          </span>
+          <div className="min-w-0">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="flex min-w-0 items-center">
+                <Link
+                  href={row.href}
+                  className="text-ink block min-h-6 min-w-0 truncate py-0.5 font-medium hover:underline"
+                >
+                  {row.label}
+                </Link>
+                <RankMovement ranking={row.ranking} />
+              </div>
+              <SourceFigure ranking={row.ranking} noun={row.figureNoun} className="ml-auto" />
+            </div>
+            <EvidenceLine
+              reasons={reasonsBesideSourceFigure(row.ranking, row.reasons)}
+              ranking={row.ranking}
+              extra={row.extra}
+              className="mt-1"
+            />
+          </div>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+/**
+ * "N authors" qualifier for index rows. Skipped when the server already cites
+ * that count, so the line never reads the same number twice.
+ */
+function authorsQualifier(
+  count: unknown,
+  reasons: WhyNowReason[],
+  ranking?: DiscoveryItemRanking
+): string | null {
+  if (typeof ranking?.source_breadth === "number") return null;
+  if (/authors?\b/.test(reasons[0]?.text ?? "")) return null;
+  if (typeof count === "number" && reasons[0]?.text.includes(formatCompactNumber(count))) {
+    return null;
+  }
+  return typeof count === "number" && Number.isFinite(count) && count > 1
+    ? `${formatCompactNumber(count)} authors`
+    : null;
+}
+
+function TopicsIndex({
+  hashtags,
+  degraded,
+  window,
+  lang,
+  viewer,
+}: {
+  hashtags: HashtagEntry[];
+  degraded?: boolean;
+  window: StatsWindow;
+  lang?: string;
+  viewer?: string;
+}) {
+  const rows = hashtags
+    .slice(0, INDEX_ROW_LIMIT)
+    .map((entry, index): IndexRow | null => {
+      const hashtag = String(entry.hashtag ?? "").replace(/^#/, "");
+      if (!hashtag) return null;
+      if (belowVolumeFloor(listedVolume([entry.event_count, entry.count]))) return null;
+      const reasons = mapHashtagWhyNow(entry);
+      return {
+        key: `${hashtag}-${index}`,
+        href: `/hashtags/${encodeURIComponent(hashtag)}`,
+        label: `#${hashtag}`,
+        reasons,
+        ranking: entry.ranking,
+        extra: [authorsQualifier(entry.unique_authors, reasons, entry.ranking)],
+        figureNoun: "authors",
+      };
+    })
+    .filter((row): row is IndexRow => row !== null);
+  return (
+    <section aria-labelledby="topics-most-used" className="min-w-0">
+      <SectionHeader
+        kicker="Topics"
+        title="Most used topics"
+        headingId="topics-most-used"
+        action={{
+          href: buildDiscoverHref("/trending/hashtags", { window, lang, viewer }),
+          label: "Topic index",
+        }}
+        lede="Hashtags by number of authors."
+        ranked="/methodology#topics"
+      />
+      {rows.length > 0 ? (
+        <RankedIndex rows={rows} />
+      ) : (
+        <EmptyRow>
+          {degraded
+            ? "Topic rankings are temporarily unavailable."
+            : scopedEmpty(lang, "No topics in this window.")}
+        </EmptyRow>
+      )}
+    </section>
+  );
+}
+
+function LinksIndex({
+  domains,
+  degraded,
+  window,
+  lang,
+  viewer,
+}: {
+  domains: DomainEntry[];
+  degraded?: boolean;
+  window: StatsWindow;
+  lang?: string;
+  viewer?: string;
+}) {
+  const rows = domains
+    .slice(0, INDEX_ROW_LIMIT)
+    .map((entry, index): IndexRow | null => {
+      const domain = normalizeDomainLabel(String(entry.domain ?? ""));
+      if (!domain) return null;
+      if (
+        belowVolumeFloor(
+          listedVolume([entry.link_count, entry.count, entry.event_count, entry.note_count])
+        )
+      )
+        return null;
+      const reasons = mapDomainWhyNow(entry);
+      return {
+        key: `${domain}-${index}`,
+        href: `/domains/${encodeURIComponent(domain)}`,
+        label: domain,
+        reasons,
+        ranking: entry.ranking,
+        extra: [authorsQualifier(entry.unique_authors, reasons, entry.ranking)],
+        figureNoun: "authors",
+      };
+    })
+    .filter((row): row is IndexRow => row !== null);
+  return (
+    <section aria-labelledby="links-circulating" className="min-w-0">
+      <SectionHeader
+        kicker="Links"
+        title="Most shared links"
+        headingId="links-circulating"
+        action={{
+          href: buildDiscoverHref("/trending/domains", { window, lang, viewer }),
+          label: "Link index",
+        }}
+        lede="Domains by number of authors."
+        ranked="/methodology#links"
+      />
+      {rows.length > 0 ? (
+        <RankedIndex rows={rows} />
+      ) : (
+        <EmptyRow>
+          {degraded
+            ? "Link rankings are temporarily unavailable."
+            : scopedEmpty(lang, "No links circulating in this window.")}
+        </EmptyRow>
+      )}
+    </section>
+  );
+}
+
+function LeadSection({
+  lead,
+  authorsByPubkey,
+  sectionFailed,
+  lang,
+  headingId,
+  contentResolution,
+  storyLine,
+}: {
+  lead?: EventRecord;
+  authorsByPubkey: Record<string, Profile>;
+  sectionFailed: boolean;
+  lang?: string;
+  headingId: string;
+  contentResolution?: NoteContentResolution;
+  storyLine?: string | null;
+}) {
+  return (
+    // Sticky so the lead stays in view if the supporting column runs longer;
+    // `items-start` on the parent grid is required for this to take effect.
+    <section aria-labelledby={headingId} className="min-w-0 lg:sticky lg:top-20 lg:self-start">
+      <div className="mb-4 flex min-w-0 flex-wrap items-end justify-between gap-x-4 gap-y-1">
+        <h2 id={headingId} className="nm-kicker scroll-mt-24">
+          The note to read first
+        </h2>
+        <Link href="/methodology#notes" className={RANKED_LINK}>
+          How this is ranked
+        </Link>
+      </div>
+      {lead ? (
+        <EditorialNote
+          note={lead}
+          rank={1}
+          authorsByPubkey={authorsByPubkey}
+          lead
+          contentResolution={contentResolution}
+        />
+      ) : (
+        <div className="border-edge/70 text-ink-muted border-y py-12 text-sm">
+          {sectionFailed
+            ? "The note ranking is temporarily unavailable."
+            : scopedEmpty(lang, "No clear note movement in this window.")}
+        </div>
+      )}
+      {storyLine ? (
+        <p className="text-ink-soft mt-4 max-w-[46rem] text-sm leading-6">{storyLine}</p>
+      ) : null}
+    </section>
+  );
+}
+
+function SupportingNotes({
+  notes,
+  authorsByPubkey,
+  window,
+  lang,
+  viewer,
+  headingId,
+  contentResolution,
+}: {
+  notes: EventRecord[];
+  authorsByPubkey: Record<string, Profile>;
+  window: StatsWindow;
+  lang?: string;
+  viewer?: string;
+  headingId: string;
+  contentResolution?: NoteContentResolution;
+}) {
+  return (
+    <section aria-labelledby={headingId} className="min-w-0">
+      <div className="mb-3 flex min-w-0 flex-wrap items-end justify-between gap-x-3 gap-y-1">
+        <h2 id={headingId} className="nm-kicker">
+          Also moving
+        </h2>
+        <Link
+          href={buildDiscoverHref("/trending/notes", { window, lang, viewer })}
+          className="nm-action-link"
+        >
+          All notes
+        </Link>
+      </div>
+      {notes.map((note, index) => (
+        <EditorialNote
+          key={noteId(note) ?? index}
+          note={note}
+          rank={index + 2}
+          authorsByPubkey={authorsByPubkey}
+          contentResolution={contentResolution}
+        />
+      ))}
+    </section>
+  );
+}
+
+export async function EditorialOverview({
+  notes,
+  mediaLeaders,
+  rails,
+  profiles,
+  risingProfiles,
+  authorsByPubkey,
+  pulseStats,
+  sectionFailures,
+  window,
+  lang,
+  viewer,
+  personalization,
+  viewerCohortDegraded = false,
+  rankedHashtags = [],
+  rankedDomains = [],
+  archiveDay = null,
+  coverageNotes = [],
+}: {
+  notes: EventRecord[];
+  mediaLeaders: MediaLeaders;
+  rails: HomeRails;
+  profiles: Profile[];
+  risingProfiles: Profile[];
+  authorsByPubkey: Record<string, Profile>;
+  pulseStats: PulseStat[];
+  sectionFailures: {
+    notes: boolean;
+    profiles: boolean;
+    risingProfiles: boolean;
+    hashtags: boolean;
+    domains: boolean;
+  };
+  window: StatsWindow;
+  lang?: string;
+  viewer?: string;
+  personalization?: Personalization;
+  viewerCohortDegraded?: boolean;
+  rankedHashtags?: HashtagEntry[];
+  rankedDomains?: DomainEntry[];
+  archiveDay?: string | null;
+  coverageNotes?: readonly CoverageNote[];
+}) {
+  const lead = notes[0];
+  const followups = selectSupportingNotes(notes, 4);
+  const seenNoteIds = new Set<string>();
+  for (const event of lead ? [lead, ...followups] : followups) {
+    const id = noteId(event);
+    if (id) seenNoteIds.add(id);
+  }
+  const conversations = takeUnseen(rails.conversations, seenNoteIds, 4);
+  const zapped = takeUnseen(rails.zapped, seenNoteIds, 3);
+  const mediaEvents = MEDIA_RANKINGS.flatMap((ranking) => {
+    const event = mediaLeaders[ranking.format];
+    return event ? [event] : [];
+  });
+  const previewEvents = [
+    ...(lead ? [lead, ...followups] : []),
+    ...mediaEvents,
+    ...(rails.article ? [rails.article] : []),
+    ...conversations,
+    ...zapped,
+  ];
+  const contentResolution = await resolveContentReferences(previewEvents).catch(() => undefined);
+  if (contentResolution) {
+    const knownProfiles = contentResolution.profilesByPubkey ?? {};
+    const quotedPubkeys = Object.values(contentResolution.eventsById ?? {})
+      .map((event) => (typeof event?.pubkey === "string" ? event.pubkey : ""))
+      .filter((pubkey) => pubkey.length > 0 && !knownProfiles[pubkey.toLowerCase()]);
+    const quotedAuthors =
+      quotedPubkeys.length > 0
+        ? await fetchProfilesByPubkey(quotedPubkeys, "shortTtl").catch(
+            () => ({}) as Record<string, Profile>
+          )
+        : {};
+    contentResolution.profilesByPubkey = {
+      ...knownProfiles,
+      ...quotedAuthors,
+      ...authorsByPubkey,
+    };
+  }
+  return (
+    <div className="space-y-[var(--space-section)]">
+      <PersonalizationNote
+        payload={{
+          personalization,
+          degraded_reasons: viewerCohortDegraded ? ["viewer_cohort"] : undefined,
+        }}
+        scope="home"
+      />
+      <section
+        aria-label="Leading notes"
+        className="grid min-w-0 items-start gap-10 lg:grid-cols-[minmax(0,1.75fr)_minmax(16rem,0.8fr)] lg:gap-14"
+      >
+        <LeadSection
+          lead={lead}
+          authorsByPubkey={authorsByPubkey}
+          sectionFailed={sectionFailures.notes}
+          lang={lang}
+          headingId="leading-signal"
+          contentResolution={contentResolution}
+          storyLine={sharedTopicLine(lead ? [lead, ...followups] : followups)}
+        />
+        <SupportingNotes
+          notes={followups}
+          authorsByPubkey={authorsByPubkey}
+          window={window}
+          lang={lang}
+          viewer={viewer}
+          headingId="supporting-notes"
+          contentResolution={contentResolution}
+        />
+      </section>
+
+      <FormatLeaders
+        leaders={mediaLeaders}
+        article={rails.article}
+        authorsByPubkey={authorsByPubkey}
+        window={window}
+        lang={lang}
+        viewer={viewer}
+        contentResolution={contentResolution}
+      />
+
+      <LiveStrip events={rails.live} authorsByPubkey={authorsByPubkey} />
+
+      <ConversationZapRails
+        conversations={conversations}
+        zapped={zapped}
+        authorsByPubkey={authorsByPubkey}
+        window={window}
+        lang={lang}
+        viewer={viewer}
+        contentResolution={contentResolution}
+      />
+
+      <div className="grid min-w-0 items-start gap-12 lg:grid-cols-[minmax(16rem,0.7fr)_minmax(0,1.45fr)] lg:gap-14">
+        <ProfileRanking
+          className="order-2 min-w-0 lg:order-1"
+          profiles={risingProfiles}
+          degraded={sectionFailures.risingProfiles}
+          window={window}
+          lang={lang}
+          viewer={viewer}
+          headingId="up-and-coming"
+          title="Up and coming"
+          namesOnly
+          compact
+          rowLimit={5}
+          lede="Smaller accounts whose reach grew in this window."
+          rankedHref="/methodology#rising"
+          fullRankingHref={buildDiscoverHref("/discovery/profiles/rising", {
+            window,
+            lang,
+            viewer,
+          })}
+          emptyMessage="No small accounts gaining ground yet."
+          degradedMessage="Up-and-coming profiles are temporarily unavailable."
+        />
+        <ProfileRanking
+          className="order-1 min-w-0 lg:order-2"
+          profiles={profiles}
+          degraded={sectionFailures.profiles}
+          window={window}
+          lang={lang}
+          viewer={viewer}
+          headingId="profiles-in-motion"
+          lede="Ranked by reactions, replies, and zaps on each note."
+        />
+      </div>
+
+      <div
+        className={`grid min-w-0 items-start gap-14 ${
+          rails.movers.length > 0 ? "lg:grid-cols-3 lg:gap-x-10" : "lg:grid-cols-2 lg:gap-16"
+        }`}
+      >
+        <TopicsIndex
+          hashtags={rankedHashtags}
+          degraded={sectionFailures.hashtags}
+          window={window}
+          lang={lang}
+          viewer={viewer}
+        />
+        <LinksIndex
+          domains={rankedDomains}
+          degraded={sectionFailures.domains}
+          window={window}
+          lang={lang}
+          viewer={viewer}
+        />
+        <MoversColumn movers={rails.movers} />
+      </div>
+
+      {archiveDay ? (
+        <p className="text-sm">
+          <Link href={`/day/${archiveDay}`} className="nm-action-link">
+            {`Overview for ${archiveDay}`}
+          </Link>
+        </p>
+      ) : null}
+      <NetworkPulseStrip title="Network pulse" stats={pulseStats} coverageNotes={coverageNotes} />
+    </div>
+  );
+}

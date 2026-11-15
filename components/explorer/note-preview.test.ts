@@ -1,0 +1,147 @@
+import { describe, expect, it } from "vitest";
+
+import { encodeNprofile, hexToNote, hexToNpub } from "@/lib/nostr/nip19";
+
+import { activitySnippet, getEditorialNoteText } from "./note-preview";
+
+const PUBKEY = "3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d";
+const EVENT_ID = "b3e392b11f5d4f28321cedd09303a748acfd0487aea5a7450b3481c60b6e4f87";
+
+describe("activitySnippet", () => {
+  it("turns nostr mentions and event refs into readable tokens", () => {
+    const npub = hexToNpub(PUBKEY)!;
+    const note = hexToNote(EVENT_ID)!;
+    const text = activitySnippet(
+      { content: `Good morning nostr:${npub} nostr:${note} https://example.com/a/b` },
+      { profilesByPubkey: { [PUBKEY]: { pubkey: PUBKEY, display_name: "Alice" } } }
+    );
+    expect(text).toContain("@Alice");
+    expect(text).not.toMatch(/nostr:/);
+    expect(text).not.toContain(note);
+    expect(text).toMatch(/example\.com/);
+  });
+
+  it("does not dump JSON or media URLs into the line", () => {
+    expect(
+      activitySnippet({
+        content: JSON.stringify({
+          display_name: "Ada",
+          about: "Builds relays",
+          picture: "https://cdn.example/a.jpg",
+        }),
+      })
+    ).toBe("Builds relays");
+    expect(
+      activitySnippet({
+        content: "https://cdn.example/photo.jpg",
+      })
+    ).toBe("");
+    expect(activitySnippet({ content: "Hello :unresolved_emoji: there" })).toBe("Hello there");
+  });
+});
+
+describe("getEditorialNoteText", () => {
+  it("resolves mentions to @name and truncates event refs", () => {
+    const npub = hexToNpub(PUBKEY)!;
+    const note = hexToNote(EVENT_ID)!;
+    const resolved = getEditorialNoteText(
+      {
+        id: "a".repeat(64),
+        content: `Read ${npub} and nostr:${note}`,
+      },
+      {
+        profilesByPubkey: {
+          [PUBKEY]: { pubkey: PUBKEY, display_name: "Alice" },
+        },
+      }
+    );
+
+    expect(resolved).toContain("@Alice");
+    expect(resolved).not.toContain(npub);
+    expect(resolved).not.toMatch(/nostr:/);
+    expect(resolved.length).toBeLessThan(npub.length + note.length);
+  });
+
+  it("omits an event mention once that note is loaded", () => {
+    const note = hexToNote(EVENT_ID)!;
+    const text = getEditorialNoteText(
+      {
+        id: "a".repeat(64),
+        content: `See this\n\nnostr:${note}`,
+      },
+      {
+        eventsById: {
+          [EVENT_ID]: { id: EVENT_ID, content: "Quoted body", kind: 1 },
+        },
+      }
+    );
+
+    expect(text).toBe("See this");
+    expect(text).not.toContain(note);
+  });
+
+  it("truncates leftover identifier-heavy tokens", () => {
+    const text = getEditorialNoteText({
+      id: "a".repeat(64),
+      content: `Read ${`npub1${"x".repeat(58)}`} and nostr:${`note1${"y".repeat(58)}`}`,
+    });
+
+    expect(text).not.toMatch(/npub1x{20,}/);
+    expect(text).not.toMatch(/note1y{20,}/);
+    expect(text).not.toContain("Nostr reference");
+  });
+
+  it("resolves a long nprofile instead of clamping the raw bech32", () => {
+    const nprofile = encodeNprofile({
+      pubkey: PUBKEY,
+      relays: [
+        "wss://relay.damus.io",
+        "wss://nos.lol",
+        "wss://relay.primal.net",
+        "wss://relay.snort.social",
+      ],
+    })!;
+    const text = getEditorialNoteText(
+      {
+        id: "a".repeat(64),
+        content: `Cool to see nostr:${nprofile}`,
+      },
+      {
+        profilesByPubkey: {
+          [PUBKEY]: { pubkey: PUBKEY, display_name: "Zapstore" },
+        },
+      }
+    );
+
+    expect(text).toBe("Cool to see @Zapstore");
+    expect(text).not.toMatch(/nprofile1/);
+  });
+
+  it("removes media file urls from editorial copy", () => {
+    const text = getEditorialNoteText({
+      id: "b".repeat(64),
+      content: "Look at this https://cdn.example/photo.png nice",
+    });
+
+    expect(text).toBe("Look at this nice");
+    expect(text).not.toMatch(/https?:\/\/|photo\.png/i);
+  });
+
+  it("removes compact media host placeholders from API preview copy", () => {
+    const text = getEditorialNoteText({
+      id: "c".repeat(64),
+      content:
+        "GM ☕️\nhttps://blossom.primal.net/67abe3541726675f55edbcb2bf134c1d15c23bd1db0ba31b7e2aa4b4ddce7c78.jpg",
+      preview: {
+        mode: "media_led_preview",
+        display_content: "GM ☕️ [blossom.primal.net]",
+        contains_raw: false,
+        is_compact: false,
+        domains: ["blossom.primal.net"],
+      },
+    } as never);
+
+    expect(text).toBe("GM ☕️");
+    expect(text).not.toContain("blossom.primal.net");
+  });
+});

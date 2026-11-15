@@ -1,0 +1,45 @@
+import { expect, test } from "@playwright/test";
+
+test.describe("explorer smoke", () => {
+  test("home renders brand and search entry", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.getByRole("link", { name: /nostrmash/i }).first()).toBeVisible();
+    await expect(page.getByRole("search").or(page.locator("form")).first()).toBeVisible();
+  });
+
+  test("search page renders", async ({ page }) => {
+    await page.goto("/search?q=bitcoin");
+    await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible();
+  });
+
+  test("legacy trending overview redirects with its window", async ({ page }) => {
+    await page.goto("/trending?window=7d");
+    await expect(page).toHaveURL(/\/\?window=7d$/);
+    await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible();
+  });
+
+  test("methodology page renders", async ({ page }) => {
+    await page.goto("/methodology");
+    await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible();
+    await expect(page.getByText(/index|ranking|window/i).first()).toBeVisible();
+  });
+
+  test("profile page renders with mock API data", async ({ page }) => {
+    await page.goto(`/profiles/${"b".repeat(64)}`);
+    await expect(page.getByText(/mock author/i).first()).toBeVisible();
+  });
+
+  test("note page renders with mock API data", async ({ page }) => {
+    await page.goto(`/notes/${"a".repeat(64)}`);
+    await expect(page.getByText(/hello/i).first()).toBeVisible();
+    await expect(page.getByRole("link", { name: "#nostr" }).first()).toBeVisible();
+  });
+
+  test("unknown routes show the not-found page", async ({ page }) => {
+    await page.goto("/this-route-does-not-exist");
+    await expect(page.getByText(/page not found/i)).toBeVisible();
+    await expect(
+      page.locator("#main-content").getByRole("link", { name: "Open Discover" })
+    ).toBeVisible();
+  });
+});

@@ -1,0 +1,291 @@
+import { expect, test } from "@playwright/test";
+
+test.describe("global product shell", () => {
+  test("search is available globally by keyboard", async ({ page }) => {
+    await page.goto("/trending/notes");
+    const globalSearch = page.locator("#global-search-input");
+    await expect(globalSearch).toBeVisible();
+    await page.keyboard.press("ControlOrMeta+K");
+    await expect(globalSearch).toBeFocused();
+
+    await globalSearch.fill("bitcoin");
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveURL(/\/search\?q=bitcoin&tab=all/);
+    await expect(globalSearch).toHaveCount(0);
+    await expect(
+      page.getByRole("combobox", {
+        name: "Search notes, profiles, hashtags, relays, and event IDs",
+      })
+    ).toHaveValue("bitcoin");
+
+    await page
+      .getByRole("navigation", { name: "Primary" })
+      .getByRole("link", { name: "Network" })
+      .click();
+    await expect(page).toHaveURL(/\/relays/);
+    await expect(globalSearch).toHaveValue("");
+  });
+
+  test("header search clears typed text after leaving without submitting", async ({ page }) => {
+    await page.goto("/trending/notes");
+    const globalSearch = page.locator("#global-search-input");
+    await globalSearch.fill("bitcoin");
+    await page
+      .getByRole("navigation", { name: "Primary" })
+      .getByRole("link", { name: "Network" })
+      .click();
+    await expect(page).toHaveURL(/\/relays/);
+    await expect(globalSearch).toHaveValue("");
+  });
+
+  test("mobile search opens as a focused modal surface", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open search" }).click();
+
+    const dialog = page.getByRole("dialog", { name: "Search NostrMash" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("combobox")).toBeFocused();
+  });
+
+  test("primary navigation reflects the product architecture", async ({ page }) => {
+    await page.goto("/");
+    const nav = page.getByRole("navigation", { name: "Primary" });
+    await expect(nav.getByRole("link", { name: "Discover" })).toHaveAttribute(
+      "aria-current",
+      "page"
+    );
+    await expect(nav.getByRole("link", { name: "Network" })).toBeVisible();
+    await expect(nav.getByRole("link", { name: "Stats" })).toHaveAttribute("href", "/stats");
+    await expect(nav.getByRole("link", { name: "Search" })).toHaveCount(0);
+  });
+
+  test("Discover category and mode context stay explicit", async ({ page }) => {
+    await page.goto("/trending/long-form?window=7d");
+
+    const categories = page.getByRole("navigation", { name: "Discover categories" });
+    await expect(categories.getByRole("link", { name: "Articles" })).toHaveAttribute(
+      "aria-current",
+      "page"
+    );
+    await expect(categories.getByRole("link", { name: "People" })).toHaveAttribute(
+      "href",
+      "/trending/profiles?window=7d"
+    );
+    await expect(page.getByRole("navigation", { name: "notes modes" })).toHaveCount(0);
+
+    await page.goto("/trending/notes?window=7d&lang=ja");
+    await expect(categories.getByRole("link", { name: "Notes" })).toHaveAttribute(
+      "aria-current",
+      "page"
+    );
+    const noteModes = page.getByRole("navigation", { name: "notes modes" });
+    await expect(noteModes.getByRole("link", { name: "Most zapped" })).toHaveAttribute(
+      "href",
+      "/discovery/notes/zapped?window=7d&lang=ja"
+    );
+    await expect(noteModes.getByRole("link", { name: "Conversations" })).toHaveAttribute(
+      "href",
+      "/discovery/conversations/hot?window=7d&lang=ja"
+    );
+    await expect(noteModes.getByRole("link", { name: "Most bookmarked" })).toHaveAttribute(
+      "href",
+      "/discovery/notes/bookmarked?lang=ja"
+    );
+
+    await page.goto("/trending/profiles?window=7d&lang=ja");
+    const peopleModes = page.getByRole("navigation", { name: "people modes" });
+    await expect(peopleModes.getByRole("link", { name: "Up and coming" })).toHaveAttribute(
+      "href",
+      "/discovery/profiles/rising?window=7d&lang=ja"
+    );
+    await expect(peopleModes.getByRole("link", { name: "Most followed" })).toHaveAttribute(
+      "href",
+      "/discovery/profiles/followed"
+    );
+    await expect(peopleModes.getByRole("link", { name: "Most supported" })).toHaveAttribute(
+      "href",
+      "/discovery/profiles/supported?window=7d"
+    );
+
+    await page.goto("/live");
+    await expect(categories.getByRole("link", { name: "Media" })).toHaveAttribute(
+      "aria-current",
+      "page"
+    );
+    const mediaModes = page.getByRole("navigation", { name: "media modes" });
+    await expect(mediaModes.getByRole("link", { name: "Live" })).toHaveAttribute(
+      "aria-current",
+      "page"
+    );
+    await expect(mediaModes.getByRole("link", { name: "Live" })).toHaveAttribute("href", "/live");
+    await expect(page.getByRole("group", { name: "Ranking window" })).toHaveCount(0);
+  });
+
+  test("entity pages use contextual return navigation instead of category chrome", async ({
+    page,
+  }) => {
+    await page.goto(`/notes/${"a".repeat(64)}`);
+    const context = page.getByRole("navigation", { name: "Discovery context" });
+    await expect(context.getByRole("link", { name: "Back to Notes" })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Discover categories" })).toHaveCount(0);
+  });
+
+  test("sticky header does not obscure anchored Discover content", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/");
+    const target = page.locator("#leading-signal");
+    await expect(target).toBeVisible();
+    await target.evaluate((element) => element.scrollIntoView());
+
+    const positions = await page.evaluate(() => {
+      const header = document.querySelector("header");
+      const target = document.getElementById("leading-signal");
+      return {
+        headerBottom: header?.getBoundingClientRect().bottom ?? 0,
+        targetTop: target?.getBoundingClientRect().top ?? 0,
+      };
+    });
+
+    expect(positions.targetTop).toBeGreaterThanOrEqual(positions.headerBottom);
+  });
+
+  test("home lead, an index row, and a people row stay readable", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/");
+
+    const lead = page.locator("section", { has: page.locator("#leading-signal") });
+    const leadText = lead.locator("article").first().locator(".text-ink-strong").first();
+    await expect(leadText).toBeVisible();
+    await expect(lead.locator(".nm-note-body")).toHaveCount(0);
+    await expect(page.getByText(/breadth of authors/i)).toHaveCount(0);
+    const fontSize = await leadText.evaluate((element) =>
+      parseFloat(getComputedStyle(element).fontSize)
+    );
+    expect(fontSize).toBeGreaterThanOrEqual(28);
+
+    await expect(
+      page.getByRole("heading", { name: "What has the network’s attention." })
+    ).toBeVisible();
+    await expect(page.locator("#today-in-brief")).toHaveCount(0);
+    const topics = page.locator("section", { has: page.locator("#topics-most-used") });
+    await expect(topics.getByRole("link", { name: "#nostr" })).toBeVisible();
+    const links = page.locator("section", { has: page.locator("#links-circulating") });
+    await expect(links.getByRole("link", { name: "example.com" })).toBeVisible();
+
+    const people = page.locator("section", { has: page.locator("#profiles-in-motion") });
+    await expect(people.getByRole("link").first()).toBeVisible();
+  });
+
+  test("the first note author is on screen at phone width", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/");
+    const author = page
+      .locator("section", { has: page.locator("#leading-signal") })
+      .locator("article")
+      .first()
+      .locator("a")
+      .first();
+    await expect(author).toBeVisible();
+    const box = await author.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.y + box!.height).toBeLessThanOrEqual(844);
+  });
+
+  test("note header stays in view at phone and desktop widths", async ({ page }) => {
+    for (const width of [390, 1280]) {
+      await page.setViewportSize({ width, height: 844 });
+      await page.goto(`/notes/${"a".repeat(64)}`);
+      const heading = page.getByRole("heading", { level: 1 });
+      await expect(heading).toBeVisible();
+      const box = await heading.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.y).toBeGreaterThanOrEqual(0);
+      expect(box!.y).toBeLessThan(844);
+    }
+  });
+});
+
+test.describe("responsive visual references", () => {
+  test.skip(
+    Boolean(process.env.CI),
+    "Pixel baselines are platform-specific; portable UI checks still run in CI."
+  );
+
+  test.beforeEach(async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+  });
+
+  test("Discover desktop reference", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto("/");
+    await expect(page).toHaveScreenshot("discover-desktop.png", {
+      fullPage: true,
+      animations: "disabled",
+    });
+  });
+
+  test("Discover mobile reference", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/");
+    await expect(page).toHaveScreenshot("discover-mobile.png", {
+      fullPage: true,
+      animations: "disabled",
+    });
+  });
+
+  test("Discover laptop reference", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/");
+    await expect(page).toHaveScreenshot("discover-laptop.png", {
+      fullPage: true,
+      animations: "disabled",
+    });
+  });
+
+  test("Discover light references", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/");
+    await page.getByRole("button", { name: "Toggle color theme" }).click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    await expect(page).toHaveScreenshot("discover-light-desktop.png", {
+      fullPage: true,
+      animations: "disabled",
+    });
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page).toHaveScreenshot("discover-light-mobile.png", {
+      fullPage: true,
+      animations: "disabled",
+    });
+  });
+});
+
+test.describe("experience budgets", () => {
+  test("Discover remains stable and has no horizontal overflow", async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as typeof window & { __layoutShiftScore?: number }).__layoutShiftScore = 0;
+      new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          const shift = entry as PerformanceEntry & { value: number; hadRecentInput: boolean };
+          if (!shift.hadRecentInput) {
+            const target = window as typeof window & { __layoutShiftScore?: number };
+            target.__layoutShiftScore = (target.__layoutShiftScore ?? 0) + shift.value;
+          }
+        }
+      }).observe({ type: "layout-shift", buffered: true });
+    });
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/");
+    await page.waitForLoadState("networkidle");
+
+    const result = await page.evaluate(() => ({
+      cls: (window as typeof window & { __layoutShiftScore?: number }).__layoutShiftScore ?? 0,
+      overflows: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+    }));
+
+    expect(result.cls).toBeLessThanOrEqual(0.1);
+    expect(result.overflows).toBe(false);
+  });
+});

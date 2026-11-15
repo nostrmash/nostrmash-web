@@ -1,0 +1,581 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   Theme tokens
+   Values live as CSS variables so they can flip per theme. Dark is the default
+   (`:root`); light applies only when the user explicitly chooses it via
+   `[data-theme="light"]`. Components only read the semantic `--color-*`
+   utilities below, so theming touches values in one place.
+--------------------------------------------------------------------------- */
+
+:root {
+  color-scheme: dark;
+
+  --background: #191918;
+  --foreground: #efede8;
+
+  --surface-sunken: #151514;
+  --surface: #21211f;
+  --surface-emphasis: #282825;
+  --surface-raised: #282825;
+  --surface-elevated: #30302c;
+  --surface-hover: #353531;
+  --edge: #383733;
+  --edge-strong: #4b4944;
+
+  --accent: #625f59;
+  --accent-soft: #a39f97;
+  --accent-hover: #706d66;
+  --accent-ink: #dedbd4;
+  --accent-strong: #c6c2b9;
+
+  --ink-strong: #f5f2ec;
+  --ink: #efede8;
+  --ink-soft: #d8d5ce;
+  --ink-dim: #c1bdb5;
+  --ink-muted: #aaa69e;
+  --ink-faint: #8b8780;
+
+  --link: #c7c3bb;
+  --link-hover: #e0ddd6;
+
+  /* Semantic status — use these instead of raw emerald/red/amber utilities. */
+  --success: #34d399; /* emerald-400 */
+  --success-soft: rgba(16, 185, 129, 0.12);
+  --success-ink: #a7f3d0; /* emerald-200 */
+
+  --warning: #fbbf24; /* amber-400 */
+  --warning-soft: rgba(245, 158, 11, 0.14);
+  --warning-ink: #fde68a; /* amber-200 */
+
+  --danger: #f87171; /* red-400 */
+  --danger-soft: rgba(239, 68, 68, 0.14);
+  --danger-ink: #fecaca; /* red-200 */
+
+  /* Decorative discovery accents (hashtags / domains rails). */
+  --accent-fuchsia: #e879f9;
+  --accent-fuchsia-ink: #f5d0fe;
+  --accent-sky: #38bdf8;
+  --accent-sky-ink: #bae6fd;
+
+  --skeleton-base: rgba(83, 81, 76, 0.45);
+  --skeleton-shimmer: rgba(241, 237, 228, 0.08);
+
+  --radius-control: 0.625rem;
+  --radius-surface: 1rem;
+  --space-section: clamp(3.25rem, 5vw, 5rem);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --background: #e8e7e2;
+  --foreground: #24231f;
+
+  --surface-sunken: #deddd7;
+  --surface: #efeee9;
+  --surface-emphasis: #f3f1ec;
+  --surface-raised: #f3f1ec;
+  --surface-elevated: #faf9f5;
+  --surface-hover: #e3e1db;
+  --edge: #cccac3;
+  --edge-strong: #b4b1a9;
+
+  --accent: #5f5b55;
+  --accent-soft: #79746c;
+  --accent-hover: #4d4944;
+  --accent-ink: #494640;
+  --accent-strong: #3b3935;
+
+  --ink-strong: #171613;
+  --ink: #24231f;
+  --ink-soft: #34322e;
+  --ink-dim: #48453f;
+  --ink-muted: #5c5952;
+  --ink-faint: #66625c;
+
+  --link: #4f4b45;
+  --link-hover: #292723;
+
+  --success: #059669; /* emerald-600 */
+  --success-soft: rgba(16, 185, 129, 0.12);
+  --success-ink: #047857; /* emerald-700 */
+
+  --warning: #d97706; /* amber-600 */
+  --warning-soft: rgba(245, 158, 11, 0.14);
+  --warning-ink: #92400e; /* amber-800 — AA on warning-soft over page bg */
+
+  --danger: #dc2626; /* red-600 */
+  --danger-soft: rgba(239, 68, 68, 0.12);
+  --danger-ink: #991b1b; /* red-800 — AA on danger-soft over page bg */
+
+  --accent-fuchsia: #c026d3;
+  --accent-fuchsia-ink: #701a75;
+  --accent-sky: #0284c7;
+  --accent-sky-ink: #075985;
+
+  --skeleton-base: rgba(183, 180, 172, 0.55);
+  --skeleton-shimmer: rgba(255, 254, 249, 0.5);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+
+  --color-surface: var(--surface);
+  --color-surface-sunken: var(--surface-sunken);
+  --color-surface-emphasis: var(--surface-emphasis);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-elevated: var(--surface-elevated);
+  --color-surface-hover: var(--surface-hover);
+  --color-edge: var(--edge);
+  --color-edge-strong: var(--edge-strong);
+
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-strong: var(--accent-strong);
+
+  --color-ink-strong: var(--ink-strong);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-ink-dim: var(--ink-dim);
+  --color-ink-muted: var(--ink-muted);
+  --color-ink-faint: var(--ink-faint);
+
+  --color-link: var(--link);
+  --color-link-hover: var(--link-hover);
+
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-success-ink: var(--success-ink);
+
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-warning-ink: var(--warning-ink);
+
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-danger-ink: var(--danger-ink);
+
+  --color-accent-fuchsia: var(--accent-fuchsia);
+  --color-accent-fuchsia-ink: var(--accent-fuchsia-ink);
+  --color-accent-sky: var(--accent-sky);
+  --color-accent-sky-ink: var(--accent-sky-ink);
+
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --font-display: var(--font-bricolage), var(--font-geist-sans), Arial, Helvetica, sans-serif;
+}
+
+/* Element resets live in @layer base so Tailwind utilities (text-*, etc.)
+   correctly override them — an unlayered `a { color: inherit }` was defeating
+   every `text-*` class on links (including TabBar active labels). */
+@layer base {
+  html {
+    scroll-padding-top: 5.5rem;
+  }
+
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+    line-height: 1.5;
+    overflow-x: clip;
+  }
+
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  /* Typographic refinement: balance headings, avoid paragraph orphans. */
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+  p {
+    text-wrap: pretty;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Motion layer
+   Dependency-free animation primitives. Plain (unlayered) CSS so they reliably
+   win over Tailwind's layered utilities. Every animation degrades gracefully
+   under `prefers-reduced-motion`.
+--------------------------------------------------------------------------- */
+
+@keyframes nm-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes nm-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes nm-shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.nm-fade-in {
+  animation: nm-fade-in 320ms ease both;
+}
+
+.nm-pop-in {
+  transform-origin: top center;
+  animation: nm-pop-in 150ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Centralized interactive vocabulary: one press/transition feel everywhere. */
+.nm-pressable {
+  transition-property: transform, background-color, border-color, color, box-shadow, opacity;
+  transition-duration: 160ms;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+.nm-pressable:active {
+  transform: scale(0.97);
+}
+
+/* Skeleton placeholder with a single travelling shimmer highlight. */
+.nm-skeleton {
+  position: relative;
+  overflow: hidden;
+  border-radius: 0.5rem;
+  background-color: var(--skeleton-base);
+}
+.nm-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent 0%, var(--skeleton-shimmer) 50%, transparent 100%);
+  animation: nm-shimmer 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nm-fade-in,
+  .nm-pop-in {
+    animation: none;
+  }
+  .nm-pressable {
+    transition-property: background-color, border-color, color, box-shadow, opacity;
+  }
+  .nm-pressable:active {
+    transform: none;
+  }
+  .nm-skeleton::after {
+    animation: none;
+  }
+}
+
+/* Live pulse dot — the recurring "this is live" signal. */
+@keyframes nm-ping {
+  0% {
+    transform: scale(1);
+    opacity: 0.7;
+  }
+  75%,
+  100% {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+
+.nm-live-dot {
+  position: relative;
+  display: inline-block;
+  height: 0.5rem;
+  width: 0.5rem;
+  flex: none;
+  border-radius: 9999px;
+  background: var(--color-accent-soft);
+}
+.nm-live-dot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: inherit;
+  animation: nm-ping 1.9s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+/* Heartbeat trace — a bright segment travelling along a normalized SVG path. */
+@keyframes nm-trace {
+  from {
+    stroke-dashoffset: 130;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes nm-spark-dot {
+  0%,
+  100% {
+    opacity: 0.95;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(1.55);
+  }
+}
+
+.nm-spark-trace {
+  stroke-dasharray: 26 130;
+  animation: nm-trace 3.4s linear infinite;
+}
+.nm-spark-dot {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: nm-spark-dot 1.9s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nm-live-dot::after,
+  .nm-spark-trace,
+  .nm-spark-dot {
+    animation: none;
+  }
+}
+
+/* Fluid display type scale — Bricolage for hero/section display headings. */
+.nm-display-xl {
+  font-family: var(--font-display);
+  font-size: clamp(2.65rem, 1.7rem + 3.3vw, 5.25rem);
+  line-height: 0.98;
+  letter-spacing: -0.045em;
+  font-weight: 540;
+}
+.nm-display-lg {
+  font-family: var(--font-display);
+  font-size: clamp(2rem, 1.45rem + 1.7vw, 3rem);
+  line-height: 1.04;
+  letter-spacing: -0.042em;
+  font-weight: 570;
+}
+.nm-title {
+  font-family: var(--font-display);
+  font-size: clamp(1.5rem, 1.24rem + 0.8vw, 2rem);
+  line-height: 1.12;
+  letter-spacing: -0.03em;
+  font-weight: 570;
+}
+
+.nm-kicker {
+  color: var(--ink-faint);
+  font-size: 0.75rem;
+  font-weight: 650;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.nm-body {
+  font-size: 1rem;
+  line-height: 1.7;
+}
+
+/* Focal note on the note detail page: comfortable reading size. */
+.nm-note-body {
+  font-size: clamp(1.0625rem, 1rem + 0.25vw, 1.125rem);
+  line-height: 1.6;
+}
+
+/* Replies and ancestors in a thread: a notch above list cards. */
+.nm-reply-body {
+  font-size: 0.9375rem;
+  line-height: 1.55;
+}
+
+.nm-meta {
+  color: var(--ink-muted);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.nm-evidence {
+  color: var(--ink-muted);
+  font-size: 0.8125rem;
+  line-height: 1.55;
+}
+
+/*
+ * Horizontal tab rows: fade whichever edge is clipped so overflow is
+ * discoverable without a scrollbar. `data-overflow` is set by <TabOverflow>.
+ */
+.nm-tab-scroller[data-overflow="end"] {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 3.5rem), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 3.5rem), transparent);
+}
+.nm-tab-scroller[data-overflow="start"] {
+  -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 3.5rem), transparent);
+  mask-image: linear-gradient(to left, #000 calc(100% - 3.5rem), transparent);
+}
+.nm-tab-scroller[data-overflow="both"] {
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent,
+    #000 3.5rem,
+    #000 calc(100% - 3.5rem),
+    transparent
+  );
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    #000 3.5rem,
+    #000 calc(100% - 3.5rem),
+    transparent
+  );
+}
+
+/*
+ * Secondary navigation links ("All notes", "Full ranking", footer). Visibly
+ * actionable (arrow, hover underline) and padded to a ≥24px hit target even
+ * at 13px type (WCAG 2.5.8).
+ */
+.nm-action-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  min-height: 1.5rem;
+  padding-block: 0.125rem;
+  color: var(--ink-soft);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.25;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 0.25em;
+  transition:
+    color 160ms cubic-bezier(0.2, 0, 0, 1),
+    text-decoration-color 160ms cubic-bezier(0.2, 0, 0, 1);
+}
+.nm-action-link::after {
+  content: "→";
+  font-weight: 400;
+  transition: transform 160ms cubic-bezier(0.2, 0, 0, 1);
+}
+.nm-action-link:hover,
+.nm-action-link:focus-visible {
+  color: var(--ink);
+  text-decoration-color: var(--accent-soft);
+}
+.nm-action-link:hover::after {
+  transform: translateX(0.15em);
+}
+.nm-action-link--quiet::after {
+  content: none;
+}
+.nm-action-link--quiet {
+  color: var(--ink-muted);
+  font-weight: 450;
+}
+@media (prefers-reduced-motion: reduce) {
+  .nm-action-link,
+  .nm-action-link::after {
+    transition: none;
+  }
+  .nm-action-link:hover::after {
+    transform: none;
+  }
+}
+
+.nm-elevated-surface {
+  border-color: var(--edge-strong);
+  background: var(--surface-raised);
+  box-shadow:
+    inset 0 1px color-mix(in srgb, var(--foreground) 7%, transparent),
+    0 14px 36px rgba(0, 0, 0, 0.22);
+}
+
+:root[data-theme="light"] .nm-elevated-surface {
+  background: var(--surface-elevated);
+  box-shadow:
+    inset 0 1px rgba(255, 255, 255, 0.86),
+    0 14px 36px rgba(31, 29, 25, 0.1);
+}
+
+.nm-signal-rule {
+  position: relative;
+}
+
+.nm-signal-rule::before {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: min(4rem, 22%);
+  height: 2px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  content: "";
+}
+
+/* Theme-conditional visibility (used to swap the logo asset without JS). */
+.theme-dark-only {
+  display: var(--show-dark, block);
+}
+.theme-light-only {
+  display: var(--show-light, none);
+}
+:root {
+  --show-dark: block;
+  --show-light: none;
+}
+:root[data-theme="light"] {
+  --show-dark: none;
+  --show-light: block;
+}
+
+/* Native fullscreen must show the whole video frame. Card previews used to
+   keep object-fit: cover and a max-height into fullscreen, which cropped
+   portrait video. Overflow on the frame also clips fullscreen video in Safari. */
+video:fullscreen,
+video:-webkit-full-screen {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  object-fit: contain;
+  border-radius: 0;
+  background: #000;
+}
+
+video[data-native-fullscreen] {
+  object-fit: contain;
+}
+
+.nm-media-frame:has(video:fullscreen),
+.nm-media-frame:has(video:-webkit-full-screen),
+.nm-media-frame:has(video[data-native-fullscreen]) {
+  overflow: visible;
+  border-radius: 0;
+}
+
+/* Windows High Contrast / forced-colors: box-shadow focus rings are dropped,
+   so guarantee a visible outline on keyboard focus. */
+@media (forced-colors: active) {
+  a:focus-visible,
+  button:focus-visible,
+  input:focus-visible,
+  summary:focus-visible,
+  [tabindex]:focus-visible {
+    outline: 2px solid CanvasText;
+    outline-offset: 2px;
+  }
+}

@@ -1,0 +1,233 @@
+import type { Metadata } from "next";
+import Link from "@/components/app-link";
+
+import { DebugDisclosure } from "@/components/explorer/debug-disclosure";
+import { EmptyState } from "@/components/explorer/empty-state";
+import { IdBadge } from "@/components/explorer/id-badge";
+import { AboutThisData } from "@/components/explorer/about-this-data";
+import { PageHero } from "@/components/explorer/page-hero";
+import { EntityContextNav } from "@/components/discover/entity-context-nav";
+import { HashtagsList, NotesList } from "@/components/data/renderers";
+import { SectionCard } from "@/components/ui/section-card";
+import { ErrorPanel, LoadErrors } from "@/components/ui/status-panels";
+import { getHashtagNotes, getRelatedHashtags } from "@/lib/api/endpoints";
+import { extractNativeApiSemantics } from "@/lib/api/normalize";
+import { extractEventAuthorPubkeys, fetchProfilesByPubkey } from "@/lib/api/profile-hydration";
+import { isValidHashtag } from "@/lib/hashtags";
+import { loadMoreHashtagNotes } from "@/app/hashtags/[hashtag]/notes/actions";
+import { LoadMoreList } from "@/components/data/load-more-list";
+import {
+  MAX_LIST_LIMIT,
+  buildContinuationHref,
+  readSearchParam,
+  toUrlSearchParams,
+} from "@/lib/search-params/pagination";
+import type { Profile } from "@/lib/types/api";
+import { toUserFacingErrorMessage } from "@/lib/errors/user-message";
+
+type Params = Promise<{ hashtag: string }>;
+type SearchParams = Promise<Record<string, string | string[] | undefined>>;
+
+/** Windows the hashtag notes API accepts. */
+const HASHTAG_NOTES_WINDOWS = new Set(["24h", "7d", "30d", "all"]);
+
+function normalizeHashtagParam(value: string): string {
+  return decodeURIComponent(value).trim().replace(/^#/, "").toLowerCase();
+}
+
+function hashtagTitle(value: string): string {
+  const normalized = normalizeHashtagParam(value);
+  return normalized.length > 0 ? `#${normalized}` : "#unknown";
+}
+
+export async function generateMetadata({ params }: { params: Params }): Promise<Metadata> {
+  const { hashtag } = await params;
+  const label = hashtagTitle(hashtag);
+  return {
+    title: `${label} notes`,
+    description: `NostrMash note explorer for ${label}.`,
+  };
+}
+
+export default async function HashtagNotesPage({
+  params,
+  searchParams,
+}: {
+  params: Params;
+  searchParams: SearchParams;
+}) {
+  const { hashtag } = await params;
+  const normalizedHashtag = normalizeHashtagParam(hashtag);
+  const resolvedSearchParams = await searchParams;
+  const notesCursor = readSearchParam(resolvedSearchParams, "cursor");
+  const rawLimit = Number.parseInt(readSearchParam(resolvedSearchParams, "limit") ?? "", 10);
+  const notesLimit =
+    Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, MAX_LIST_LIMIT) : 20;
+  // The API defaults to a 24h window, which starves quieter hashtags (and
+  // hides history on popular ones). This page is the "see everything"
+  // surface, so default to all-time; ?window= still narrows it.
+  const rawWindow = readSearchParam(resolvedSearchParams, "window");
+  const notesWindow = rawWindow && HASHTAG_NOTES_WINDOWS.has(rawWindow) ? rawWindow : "all";
+  const currentSearchParams = toUrlSearchParams(resolvedSearchParams);
+  const errors: string[] = [];
+  let hashtagNotesPayload: Awaited<ReturnType<typeof getHashtagNotes>> | null = null;
+  let relatedHashtagsPayload: Awaited<ReturnType<typeof getRelatedHashtags>> | null = null;
+  let authorsByPubkey: Record<string, Profile> = {};
+
+  if (!isValidHashtag(normalizedHashtag)) {
+    return (
+      <div className="space-y-6">
+        <PageHero
+          eyebrow="Hashtag notes"
+          title={hashtagTitle(hashtag)}
+          subtitle="This value is not a valid hashtag."
+        />
+        <ErrorPanel message={`"${normalizedHashtag || hashtag}" is not a valid hashtag.`} />
+        <EmptyState
+          title="Search instead"
+          message="Names and phrases belong in search, not hashtag pages."
+          actions={
+            <Link
+              href={`/search?q=${encodeURIComponent(hashtag)}`}
+              className="text-accent-soft underline-offset-2 hover:underline"
+            >
+              Open search
+            </Link>
+          }
+        />
+      </div>
+    );
+  }
+
+  const [notesResult, relatedResult] = await Promise.allSettled([
+    getHashtagNotes(normalizedHashtag, "shortTtl", {
+      cursor: notesCursor,
+      limit: notesLimit,
+      window: notesWindow,
+    }),
+    getRelatedHashtags(normalizedHashtag, "shortTtl"),
+  ]);
+
+  if (notesResult.status === "fulfilled") {
+    hashtagNotesPayload = notesResult.value;
+  } else {
+    errors.push(toUserFacingErrorMessage(notesResult.reason, "Hashtag notes lookup failed."));
+  }
+  if (relatedResult.status === "fulfilled") {
+    relatedHashtagsPayload = relatedResult.value;
+  } else {
+    errors.push(toUserFacingErrorMessage(relatedResult.reason, "Related hashtags lookup failed."));
+  }
+
+  const notes = hashtagNotesPayload?.notes ?? [];
+  const relatedHashtags = relatedHashtagsPayload?.related ?? relatedHashtagsPayload?.hashtags ?? [];
+  const notesNextCursor = hashtagNotesPayload?.next_cursor;
+  const notesRoute = `/hashtags/${encodeURIComponent(normalizedHashtag)}/notes`;
+  const notesContinuationHref = buildContinuationHref(
+    notesRoute,
+    currentSearchParams,
+    "cursor",
+    notesNextCursor
+  );
+  // "Show more" appends the next cursor page in place via a server action,
+  // preserving the reader's scroll position; the cursor link below remains
+  // as a no-JS fallback. The window must match the fetch above because the
+  // backend scopes continuation cursors to hashtag+sort+window.
+  const loadMoreNotes = loadMoreHashtagNotes.bind(null, normalizedHashtag, notesLimit, notesWindow);
+  const semantics = extractNativeApiSemantics(hashtagNotesPayload, relatedHashtagsPayload);
+
+  if (notes.length > 0) {
+    try {
+      authorsByPubkey = await fetchProfilesByPubkey(extractEventAuthorPubkeys(notes), "shortTtl");
+    } catch {
+      authorsByPubkey = {};
+    }
+  }
+
+  return (
+    <div className="space-y-8">
+      <PageHero
+        eyebrow="Hashtag notes"
+        title={`${hashtagTitle(normalizedHashtag)} notes`}
+        subtitle={`Notes using ${hashtagTitle(normalizedHashtag)}, newest first.`}
+        badges={
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <IdBadge id={hashtagTitle(normalizedHashtag)} label="hashtag" />
+            {typeof hashtagNotesPayload?.total === "number" ? (
+              <span className="border-edge-strong text-ink-dim rounded-full border px-2 py-1">
+                total: {hashtagNotesPayload.total.toLocaleString()}
+              </span>
+            ) : null}
+          </div>
+        }
+        support={
+          <div className="flex flex-wrap gap-2">
+            <Link
+              href={`/hashtags/${encodeURIComponent(normalizedHashtag)}`}
+              className="border-edge-strong text-ink-dim hover:text-ink rounded-full border px-3 py-1 text-xs"
+            >
+              Open hashtag overview
+            </Link>
+            <Link
+              href={`/search?q=${encodeURIComponent(`#${normalizedHashtag}`)}&tab=notes`}
+              className="border-edge-strong text-ink-dim hover:text-ink rounded-full border px-3 py-1 text-xs"
+            >
+              Search hashtag notes
+            </Link>
+          </div>
+        }
+      />
+      <EntityContextNav
+        view="topics"
+        parentHref={`/hashtags/${encodeURIComponent(normalizedHashtag)}`}
+        parentLabel={`#${normalizedHashtag} overview`}
+      />
+
+      <LoadErrors errors={errors} />
+
+      <SectionCard title="Hashtag notes" description="Notes using this hashtag.">
+        {notes.length > 0 ? (
+          <>
+            <NotesList notes={notes} authorsByPubkey={authorsByPubkey} />
+            {typeof notesNextCursor === "string" && notesNextCursor.length > 0 ? (
+              <>
+                <LoadMoreList
+                  initialCursor={notesNextCursor}
+                  loadMore={loadMoreNotes}
+                  label="Show more notes"
+                />
+                <noscript>
+                  <Link
+                    href={notesContinuationHref}
+                    className="border-accent/40 text-link-hover hover:text-accent-ink mt-3 inline-block rounded-full border px-3 py-1 text-xs"
+                  >
+                    Continue notes
+                  </Link>
+                </noscript>
+              </>
+            ) : null}
+          </>
+        ) : (
+          <EmptyState message={`No notes were returned for ${hashtagTitle(normalizedHashtag)}.`} />
+        )}
+      </SectionCard>
+
+      <SectionCard title="Related hashtags" description="Nearby topics connected to this hashtag.">
+        {relatedHashtags.length > 0 ? (
+          <HashtagsList hashtags={relatedHashtags} searchable />
+        ) : (
+          <EmptyState message="No related hashtags were returned for this hashtag." />
+        )}
+      </SectionCard>
+
+      <div className="space-y-3">
+        <DebugDisclosure title="Debug payload: hashtag notes" data={hashtagNotesPayload ?? {}} />
+        <AboutThisData semantics={semantics} />
+        <DebugDisclosure
+          title="Debug payload: related hashtags"
+          data={relatedHashtagsPayload ?? {}}
+        />
+      </div>
+    </div>
+  );
+}

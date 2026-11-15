@@ -1,0 +1,243 @@
+import { expect, test } from "@playwright/test";
+
+const FOCAL_ID = "a".repeat(64);
+const NESTED_REPLY_ID = "3".repeat(64);
+
+test.describe("note page reading surface", () => {
+  test("puts the note first under a single author-led heading", async ({ page }) => {
+    await page.goto(`/notes/${FOCAL_ID}`);
+
+    const headings = page.getByRole("heading", { level: 1 });
+    await expect(headings).toHaveCount(1);
+    await expect(headings).toHaveText("Mock Author");
+    await expect(page.getByRole("heading", { name: "Note by Mock Author" })).toHaveCount(0);
+
+    // The focal note is the first thing in the reading column and renders at
+    // reading size; nothing on the page is below 12px.
+    const body = page.locator("#note .nm-note-body");
+    await expect(body).toBeVisible();
+    await expect(page.locator("#conversation-context article").first()).toBeVisible();
+    await expect(page.locator("[data-thread-stem]")).toHaveCount(0);
+    const fontSize = await body.evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+    expect(fontSize).toBeGreaterThanOrEqual(17);
+
+    const smallest = await page.evaluate(() => {
+      let min = Infinity;
+      for (const el of document.querySelectorAll("main *")) {
+        if (el.children.length > 0 || !el.textContent?.trim()) continue;
+        min = Math.min(min, parseFloat(getComputedStyle(el).fontSize));
+      }
+      return min;
+    });
+    expect(smallest).toBeGreaterThanOrEqual(12);
+
+    // Schema-dump sections and leaked internals are gone.
+    await expect(page.getByText("Media summary")).toHaveCount(0);
+    await expect(page.getByText("Quote or repost context")).toHaveCount(0);
+    await expect(page.getByText(/skipped for faster/i)).toHaveCount(0);
+    await expect(page.getByText(/cursor/i)).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Inspect thread" })).toHaveCount(0);
+
+    // Engagement appears once, on the note itself: reply, repost, reaction, zap.
+    // A quoted note inside the body has its own row, so this is the note's row.
+    const stats = page.locator("#note [data-post-engagement]").last();
+    await expect(stats.getByRole("group", { name: "5 replies" })).toHaveCount(1);
+    await expect(stats.getByRole("group", { name: "5 reactions" })).toHaveCount(1);
+    await expect(stats.getByRole("group", { name: "0 zaps" })).toHaveCount(1);
+    await expect(stats.getByRole("button", { name: "22 reposts" })).toHaveCount(1);
+    await expect(page.getByRole("heading", { name: /engagement/i })).toHaveCount(0);
+  });
+
+  test("meta description is a readable summary, not a truncated URL dump", async ({ page }) => {
+    await page.goto(`/notes/${FOCAL_ID}`);
+    const description = await page
+      .locator('meta[name="description"]')
+      .first()
+      .getAttribute("content");
+    expect(description).toMatch(/^Mock Author: Hello/);
+    expect(description).not.toContain("npub1");
+    expect(description).not.toContain("nostr:");
+  });
+});
+
+test.describe("note page thread", () => {
+  test("threads replies one level deep, folds duplicates, and loads more in place", async ({
+    page,
+  }) => {
+    await page.goto(`/notes/${FOCAL_ID}`);
+
+    const thread = page.locator("#conversation-context");
+    await expect(thread.getByRole("heading", { name: /5 replies/ })).toBeVisible();
+    await expect(thread.getByRole("heading", { name: /22 in the last day/ })).toBeVisible();
+    await expect(thread.getByRole("heading", { name: /69 people/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Show thread activity" })).toHaveCount(0);
+
+    // Direct replies, plus the kind 1111 comment on this note. The branch under
+    // the first reply loads in place.
+    const topLevel = thread.getByRole("article", { name: "Reply", exact: true });
+    await expect(topLevel).toHaveCount(3);
+    await expect(thread.getByText("A quiet comment on the focal note")).toBeVisible();
+    await expect(thread.getByText("Nested reply to the first reply")).toHaveCount(0);
+    await thread.getByRole("button", { name: "Show 1 reply" }).click();
+    await expect(thread.getByText("Nested reply to the first reply")).toBeVisible();
+    await thread.getByRole("button", { name: "Show 1 reply" }).click();
+    const nested = thread.getByRole("article", { name: "Nested reply" });
+    const deep = nested.filter({ hasText: "Deep reply to the nested reply" });
+    await expect(deep.getByText("replying to")).toBeVisible();
+    await expect(deep.getByRole("link", { name: "@Nested Nancy" })).toBeVisible();
+    expect(page.url()).not.toContain("cursor");
+
+    // Two identical replies from one author are folded into a single card.
+    await expect(thread.getByText("Same reply posted twice")).toHaveCount(1);
+    await expect(thread.getByText("2 identical replies")).toBeVisible();
+
+    // The reply body opens that reply. Author links stay on the profile.
+    await expect(thread.getByRole("link", { name: "Open note" })).toHaveCount(0);
+    const firstReply = thread.getByRole("article", { name: "Reply", exact: true }).first();
+    await expect(firstReply.locator("[data-card-hit-target]")).toHaveAttribute(
+      "href",
+      `/notes/${"2".repeat(64)}`
+    );
+
+    // Second page appends in place without touching the URL.
+    const showMore = thread.getByRole("button", { name: "Show more replies" });
+    await expect(showMore).toBeVisible();
+    await showMore.scrollIntoViewIfNeeded();
+    const scrollBefore = await page.evaluate(() => window.scrollY);
+    await showMore.click();
+    await expect(thread.getByText("Second page reply loaded in place")).toBeVisible();
+    const scrollAfter = await page.evaluate(() => window.scrollY);
+    expect(Math.abs(scrollAfter - scrollBefore)).toBeLessThan(200);
+    expect(page.url()).not.toContain("cursor");
+    await expect(showMore).toBeHidden();
+    // The counted replies are all reachable, so the gap line stays quiet.
+    await expect(thread.getByText(/aren't in the index/)).toHaveCount(0);
+
+    // An opened branch can be closed without leaving the note.
+    await thread.getByRole("button", { name: "Hide reply" }).first().click();
+    await expect(thread.getByText("Nested reply to the first reply")).toBeHidden();
+    await thread.getByRole("button", { name: "Show 1 reply" }).click();
+    await expect(thread.getByText("Nested reply to the first reply")).toBeVisible();
+  });
+
+  test("opens the reply note from the reply itself", async ({ page }) => {
+    await page.goto(`/notes/${FOCAL_ID}`);
+    const reply = page
+      .getByRole("article", { name: "Reply", exact: true })
+      .filter({ hasText: "Same reply posted twice" });
+    await reply.locator("[data-card-hit-target]").click();
+    await expect(page).toHaveURL(new RegExp(`/notes/${"4".repeat(64)}$`));
+    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  });
+
+  test("shows ancestors above a nested reply", async ({ page }) => {
+    await page.goto(`/notes/${NESTED_REPLY_ID}`);
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Nested Nancy");
+    await expect(page.getByRole("link", { name: "Reply in a conversation" })).toBeVisible();
+    const ancestors = page.getByRole("list", { name: "Earlier in this thread" });
+    await expect(ancestors).toBeVisible();
+    await expect(ancestors.getByText(/Hello/)).toBeVisible();
+    await expect(ancestors.getByText("First direct reply")).toBeVisible();
+
+    const order = await page.evaluate(() => {
+      const ancestorsTop =
+        document.querySelector('[aria-label="Earlier in this thread"]')?.getBoundingClientRect()
+          .top ?? Infinity;
+      const noteTop = document.querySelector("#note")?.getBoundingClientRect().top ?? -Infinity;
+      return ancestorsTop < noteTop;
+    });
+    expect(order).toBe(true);
+
+    const stem = await page.evaluate(() => {
+      const below = [...document.querySelectorAll('[data-thread-stem="below"]')];
+      const note = document.querySelector("#note");
+      const clear = below.every((stem) => {
+        const body = stem.closest("article")?.querySelector(".nm-reply-body");
+        if (!body) return false;
+        return stem.getBoundingClientRect().right < body.getBoundingClientRect().left - 8;
+      });
+      const share = note?.querySelector("button");
+      const shareBox = share?.getBoundingClientRect();
+      const crossesShare = below.some((stem) => {
+        if (!shareBox) return false;
+        const box = stem.getBoundingClientRect();
+        return box.right > shareBox.left && box.left < shareBox.right && box.bottom > shareBox.top;
+      });
+      return {
+        count: below.length,
+        noteHasStem: note?.querySelector("[data-thread-stem]") != null,
+        clear,
+        crossesShare,
+      };
+    });
+    expect(stem.count).toBe(2);
+    expect(stem.noteHasStem).toBe(false);
+    expect(stem.clear).toBe(true);
+    expect(stem.crossesShare).toBe(false);
+  });
+
+  test("media is letterboxed instead of cropped", async ({ page }) => {
+    await page.goto(`/notes/${FOCAL_ID}`);
+    const image = page.locator("#conversation-context img[src*='tall.png']").first();
+    await expect(image).toBeAttached();
+    await expect(image).toHaveClass(/object-contain/);
+    await expect(image).not.toHaveClass(/object-cover/);
+  });
+});
+
+test.describe("note page context", () => {
+  test("reposts roll up and quotes stay in their own section", async ({ page }) => {
+    await page.goto(`/notes/${FOCAL_ID}`);
+    await page.getByRole("button", { name: "22 reposts" }).click();
+    await expect(page.getByText("Reposted by Rhea Reposter, and 21 others")).toBeVisible();
+
+    const related = page.locator("#related-notes");
+    await related.getByRole("button", { name: "Show quotes and mentions" }).click();
+    await expect(related.getByText("Quoting this note from another client")).toBeVisible();
+    await expect(related.getByText(/reposted this note/i)).toHaveCount(0);
+    await expect(related.getByText(/"sig":/)).toHaveCount(0);
+  });
+
+  test("provenance uses a date and drops empty schema fields", async ({ page }) => {
+    await page.goto(`/notes/${FOCAL_ID}`);
+    await page.getByText("Details & provenance", { exact: true }).click();
+    const provenance = page.locator("#note-provenance");
+    await expect(provenance.getByText("Has image")).toHaveCount(0);
+    await expect(provenance.getByText("Attachment count")).toHaveCount(0);
+    await expect(provenance.getByText("Open referenced note")).toHaveCount(0);
+    await expect(provenance.getByText("1,700,000,000")).toHaveCount(0);
+    await expect(provenance.getByRole("definition").filter({ hasText: /^Note$/ })).toBeVisible();
+    await expect(provenance.locator("time").first()).toBeVisible();
+  });
+
+  test("a long ancestor chain collapses the middle", async ({ page }) => {
+    await page.goto(`/notes/${"a1".repeat(32)}`);
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Nested Nancy");
+    await expect(page.getByText("A reply deep in the chain")).toBeVisible();
+    await expect(page.getByText("Second page reply loaded in place")).toBeVisible();
+    await expect(page.getByText("Nested reply to the first reply")).toHaveCount(0);
+    await page.getByRole("button", { name: "Show 2 earlier notes" }).click();
+    await expect(page.getByText("Nested reply to the first reply")).toBeVisible();
+    await expect(page.getByText("First direct reply with a tall image")).toBeVisible();
+  });
+});
+
+test.describe("note page mobile", () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+
+  test("no horizontal overflow and the breadcrumb stays on one row", async ({ page }) => {
+    await page.goto(`/notes/${FOCAL_ID}`);
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Mock Author");
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth
+    );
+    expect(overflow).toBeLessThanOrEqual(0);
+
+    const context = page.getByRole("navigation", { name: "Discovery context" });
+    const rows = await context.locator("a").evaluateAll((links) => {
+      const tops = new Set(links.map((link) => Math.round(link.getBoundingClientRect().top)));
+      return tops.size;
+    });
+    expect(rows).toBe(1);
+  });
+});

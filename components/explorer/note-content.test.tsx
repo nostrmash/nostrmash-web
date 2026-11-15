@@ -1,0 +1,337 @@
+import { render, screen } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+
+import { MentionedNoteCards, NoteBody, NoteContent } from "@/components/explorer/note-content";
+import { formatUrlForDisplay, truncateIdentifier } from "@/components/explorer/utils";
+import { encodeNaddr, hexToNpub, hexToNote } from "@/lib/nostr/nip19";
+import { tokenizeNoteContent } from "@/lib/notes/tokenize";
+
+const PUBKEY = "3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d";
+const EVENT_ID = "b3e392b11f5d4f28321cedd09303a748acfd0487aea5a7450b3481c60b6e4f87";
+const NPUB = hexToNpub(PUBKEY)!;
+const NOTE = hexToNote(EVENT_ID)!;
+const NSEC = "nsec1enxvenxvenxvenxvenxvenxvenxvenxvenxvenxvenxvenxvenxqlu2hdh";
+
+describe("NoteContent", () => {
+  it("linkifies https urls, hashtags, and mentions", () => {
+    const tokens = tokenizeNoteContent(`Hello https://example.com #nostr ${NPUB}`);
+    render(<NoteContent tokens={tokens} />);
+
+    expect(
+      screen.getByRole("link", { name: formatUrlForDisplay("https://example.com", "secondary") })
+    ).toHaveAttribute("href", "https://example.com/");
+    expect(screen.getByRole("link", { name: "#nostr" })).toHaveAttribute("href", "/hashtags/nostr");
+    expect(screen.getByRole("link", { name: /@/ })).toHaveAttribute(
+      "href",
+      `/profiles/${encodeURIComponent(NPUB)}`
+    );
+  });
+
+  it("linkifies schemeless hosts as https urls", () => {
+    const tokens = tokenizeNoteContent("Try YakBak.app today");
+    render(<NoteContent tokens={tokens} />);
+    expect(screen.getByRole("link", { name: "yakbak.app" })).toHaveAttribute(
+      "href",
+      "https://yakbak.app/"
+    );
+  });
+
+  it("renders resolved mention display name and quote card", () => {
+    const tokens = tokenizeNoteContent(`see ${NOTE}`);
+    render(
+      <NoteContent
+        tokens={tokens}
+        resolution={{
+          eventsById: {
+            [EVENT_ID]: {
+              id: EVENT_ID,
+              pubkey: PUBKEY,
+              content: "Quoted body",
+              kind: 1,
+            },
+          },
+          profilesByPubkey: {
+            [PUBKEY]: { pubkey: PUBKEY, display_name: "Alice", npub: NPUB },
+          },
+        }}
+      />
+    );
+
+    expect(screen.getByText("Alice")).toBeInTheDocument();
+    expect(screen.getByText("Quoted body")).toBeInTheDocument();
+    const noteLink = screen.getByRole("link", {
+      name: truncateIdentifier(NOTE, "note", "primary"),
+    });
+    expect(noteLink).toHaveAttribute("href", `/notes/${encodeURIComponent(EVENT_ID)}`);
+    expect(noteLink).toHaveAttribute("title", EVENT_ID);
+    expect(screen.queryByRole("link", { name: "note" })).not.toBeInTheDocument();
+  });
+
+  it("renders a loaded note mention as its own card", () => {
+    render(
+      <MentionedNoteCards
+        content={`see nostr:${NOTE}`}
+        resolution={{
+          eventsById: {
+            [EVENT_ID]: {
+              id: EVENT_ID,
+              pubkey: PUBKEY,
+              content: "Quoted body",
+              kind: 1,
+            },
+          },
+          profilesByPubkey: {
+            [PUBKEY]: { pubkey: PUBKEY, display_name: "Alice" },
+          },
+        }}
+      />
+    );
+
+    expect(screen.getByText("Alice")).toBeInTheDocument();
+    expect(screen.getByText("Quoted body")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Alice" })).toHaveAttribute(
+      "href",
+      `/notes/${encodeURIComponent(EVENT_ID)}`
+    );
+  });
+
+  it("uses the quote as the link when the quote card is hidden", () => {
+    const tokens = tokenizeNoteContent(`see ${NOTE}`);
+    render(
+      <NoteContent
+        tokens={tokens}
+        showQuotes={false}
+        resolution={{
+          eventsById: {
+            [EVENT_ID]: { id: EVENT_ID, content: "Quoted body", kind: 1 },
+          },
+        }}
+      />
+    );
+    expect(screen.getByRole("link", { name: "Quoted body" })).toHaveAttribute(
+      "href",
+      `/notes/${encodeURIComponent(EVENT_ID)}`
+    );
+    expect(screen.queryByRole("link", { name: "note" })).not.toBeInTheDocument();
+  });
+
+  it("redacts nsec secrets", () => {
+    const tokens = tokenizeNoteContent(`secret ${NSEC}`);
+    render(<NoteContent tokens={tokens} />);
+    expect(screen.getByText("[redacted nsec]")).toBeInTheDocument();
+    expect(screen.queryByText(NSEC)).not.toBeInTheDocument();
+  });
+
+  it("does not render javascript: urls as links", () => {
+    const tokens = [
+      { type: "url" as const, value: "javascript:alert(1)", href: "javascript:alert(1)" },
+      { type: "text" as const, value: " ok" },
+    ];
+    render(<NoteContent tokens={tokens} />);
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    expect(screen.getByText("javascript:alert(1)")).toBeInTheDocument();
+  });
+
+  it("hides media file urls from rendered note text", () => {
+    const tokens = tokenizeNoteContent(
+      `Hello https://cdn.example/photo.jpg and https://example.com/page`
+    );
+    render(<NoteContent tokens={tokens} />);
+
+    expect(screen.queryByText(/photo\.jpg/i)).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("link", {
+        name: formatUrlForDisplay("https://example.com/page", "secondary"),
+      })
+    ).toHaveAttribute("href", "https://example.com/page");
+  });
+
+  it("hides urls that are rendered as link preview cards", () => {
+    const tokens = tokenizeNoteContent(`Hello https://example.com/page and https://other.example`);
+    render(<NoteContent tokens={tokens} hideLinkPreviewUrls={["https://example.com/page"]} />);
+
+    expect(
+      screen.queryByRole("link", {
+        name: formatUrlForDisplay("https://example.com/page", "secondary"),
+      })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: formatUrlForDisplay("https://other.example", "secondary") })
+    ).toBeInTheDocument();
+  });
+
+  it("sanitizes hostile mention names and truncates unresolved npubs", () => {
+    const tokens = tokenizeNoteContent(`hi ${NPUB}`);
+    render(
+      <NoteContent
+        tokens={tokens}
+        resolution={{
+          profilesByPubkey: {
+            [PUBKEY]: { pubkey: PUBKEY, display_name: "nostr:evil", name: "bad\ufffdname" },
+          },
+        }}
+      />
+    );
+
+    expect(screen.getByRole("link", { name: `@${truncateIdentifier(NPUB, "npub", "primary")}` }));
+  });
+
+  it("resolves mention profiles when the map key case differs", () => {
+    const tokens = tokenizeNoteContent(`hi ${NPUB}`);
+    render(
+      <NoteContent
+        tokens={tokens}
+        resolution={{
+          profilesByPubkey: {
+            [PUBKEY.toUpperCase()]: { pubkey: PUBKEY, display_name: "Alice" },
+          },
+        }}
+      />
+    );
+    expect(screen.getByRole("link", { name: "@Alice" })).toBeInTheDocument();
+  });
+
+  it("links naddr tokens to the author long-form tab", () => {
+    const naddr = encodeNaddr({ identifier: "hello", pubkey: PUBKEY, kind: 30023 })!;
+    const tokens = tokenizeNoteContent(`see ${naddr}`);
+    render(
+      <NoteContent
+        tokens={tokens}
+        resolution={{
+          profilesByPubkey: {
+            [PUBKEY]: { pubkey: PUBKEY, display_name: "Alice" },
+          },
+        }}
+      />
+    );
+    expect(screen.getByRole("link", { name: "@Alice's article" })).toHaveAttribute(
+      "href",
+      `/profiles/${encodeURIComponent(NPUB)}?tab=long_form`
+    );
+  });
+
+  it("links a resolved @handle and leaves unknown handles as text", () => {
+    const tokens = tokenizeNoteContent("Hi @Zapstore and @nobody");
+    render(
+      <NoteContent
+        tokens={tokens}
+        resolution={{
+          profilesByPubkey: {
+            [PUBKEY]: { pubkey: PUBKEY, display_name: "Zapstore" },
+          },
+        }}
+      />
+    );
+    expect(screen.getByRole("link", { name: "@Zapstore" })).toHaveAttribute(
+      "href",
+      `/profiles/${encodeURIComponent(NPUB)}`
+    );
+    expect(screen.queryByRole("link", { name: "@nobody" })).not.toBeInTheDocument();
+    expect(screen.getByText("@nobody")).toBeInTheDocument();
+  });
+
+  it("does not nest the quote body inside the quote header link", () => {
+    const tokens = tokenizeNoteContent(`see ${NOTE}`);
+    render(
+      <NoteContent
+        tokens={tokens}
+        resolution={{
+          eventsById: {
+            [EVENT_ID]: {
+              id: EVENT_ID,
+              pubkey: PUBKEY,
+              content: "Quoted body",
+              kind: 1,
+            },
+          },
+          profilesByPubkey: {
+            [PUBKEY]: { pubkey: PUBKEY, display_name: "Alice" },
+          },
+        }}
+      />
+    );
+    const header = screen.getByRole("link", { name: "Alice" });
+    expect(header).toHaveAttribute("href", `/notes/${encodeURIComponent(EVENT_ID)}`);
+    expect(header).not.toHaveTextContent("Quoted body");
+    expect(screen.getByText("Quoted body")).toBeInTheDocument();
+  });
+
+  it("renders a quoted image and drops the media url from the quote text", () => {
+    const tokens = tokenizeNoteContent(`see ${NOTE}`);
+    const { container } = render(
+      <NoteContent
+        tokens={tokens}
+        resolution={{
+          eventsById: {
+            [EVENT_ID]: {
+              id: EVENT_ID,
+              pubkey: PUBKEY,
+              content: "Stash https://cdn.example/stash.jpg",
+              kind: 1,
+            },
+          },
+          profilesByPubkey: {
+            [PUBKEY]: { pubkey: PUBKEY, display_name: "Alice" },
+          },
+        }}
+      />
+    );
+
+    expect(screen.getByText("Stash")).toBeInTheDocument();
+    expect(screen.queryByText(/stash\.jpg/)).not.toBeInTheDocument();
+    expect(screen.queryByText("(no content)")).not.toBeInTheDocument();
+    expect(container.querySelector('img[src="https://cdn.example/stash.jpg"]')).toBeTruthy();
+  });
+
+  it("renders an imeta image inside a quote when the url is not in the text", () => {
+    const tokens = tokenizeNoteContent(`see ${NOTE}`);
+    const { container } = render(
+      <NoteContent
+        tokens={tokens}
+        resolution={{
+          eventsById: {
+            [EVENT_ID]: {
+              id: EVENT_ID,
+              pubkey: PUBKEY,
+              content: "Stash",
+              kind: 1,
+              tags: [["imeta", "url https://cdn.example/blob", "m image/jpeg", "alt Stash photo"]],
+            },
+          },
+        }}
+      />
+    );
+
+    expect(screen.getByText("Stash")).toBeInTheDocument();
+    const image = container.querySelector("img");
+    expect(image).toHaveAttribute("src", "https://cdn.example/blob");
+    expect(image).toHaveAttribute("alt", "Stash photo");
+  });
+
+  it("shows a quoted image without an empty-content placeholder", () => {
+    const tokens = tokenizeNoteContent(`see ${NOTE}`);
+    const { container } = render(
+      <NoteContent
+        tokens={tokens}
+        resolution={{
+          eventsById: {
+            [EVENT_ID]: {
+              id: EVENT_ID,
+              content: "https://cdn.example/only.jpg",
+              kind: 1,
+            },
+          },
+        }}
+      />
+    );
+
+    expect(screen.queryByText("(no content)")).not.toBeInTheDocument();
+    expect(container.querySelector('img[src="https://cdn.example/only.jpg"]')).toBeTruthy();
+  });
+
+  it("drops emphasis markers from kind-1 text", () => {
+    render(<NoteBody content={"**In this week's issue:** a `fix` and *one* more"} />);
+    expect(screen.getByText("In this week's issue: a fix and one more")).toBeInTheDocument();
+    expect(screen.queryByText(/\*\*/)).not.toBeInTheDocument();
+  });
+});

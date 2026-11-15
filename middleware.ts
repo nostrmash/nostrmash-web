@@ -1,0 +1,108 @@
+import { NextResponse, type NextRequest } from "next/server";
+
+import { isValidPubkeyOrNpubParam } from "@/lib/routing/params";
+import { RANKING_PATHS, VIEWER_ONLY_PATHS } from "@/lib/routing/ranking-paths";
+import { LANGUAGE_COOKIE, resolveRankingPreference } from "@/lib/search-params/ranking-decision";
+import { VIEWER_COOKIE, resolveViewerPreference } from "@/lib/search-params/viewer";
+import { buildContentSecurityPolicy } from "@/lib/security/content-security-policy";
+
+function rankingRedirect(request: NextRequest): string | undefined {
+  if (request.method !== "GET" && request.method !== "HEAD") return undefined;
+  const path = request.nextUrl.pathname;
+  if (!RANKING_PATHS.has(path)) return undefined;
+  const params: Record<string, string> = {};
+  request.nextUrl.searchParams.forEach((value, key) => {
+    params[key] = value;
+  });
+  const viewerCookie = request.cookies.get(VIEWER_COOKIE)?.value;
+  const decision = VIEWER_ONLY_PATHS.has(path)
+    ? resolveViewerPreference(path, params, viewerCookie)
+    : resolveRankingPreference(
+        path,
+        params,
+        request.cookies.get(LANGUAGE_COOKIE)?.value,
+        viewerCookie
+      );
+  return decision.redirectTo;
+}
+
+/**
+ * Edge middleware (not proxy.ts): Next.js 16 prefers proxy.ts (Node runtime),
+ * but @opennextjs/cloudflare 1.20.x still rejects Node middleware at build time.
+ * Keep this on the Edge runtime until OpenNext ships stable proxy support.
+ */
+
+function buildCsp(nonce: string, isEmbed: boolean): string {
+  return buildContentSecurityPolicy({
+    nonce,
+    isEmbed,
+    isDev: process.env.NODE_ENV === "development",
+  });
+}
+
+function createRequestNonce(): string {
+  // Prefer Web Crypto over Node Buffer — Edge/OpenNext Workers are not Node.
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+export function middleware(request: NextRequest) {
+  const nonce = createRequestNonce();
+  const isEmbed = request.nextUrl.pathname.startsWith("/embed/");
+  const csp = buildCsp(nonce, isEmbed);
+
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set("x-pathname", request.nextUrl.pathname);
+  requestHeaders.set("x-nonce", nonce);
+  // Next reads the nonce from the request CSP header during SSR.
+  requestHeaders.set("Content-Security-Policy", csp);
+
+  const rankingTarget = rankingRedirect(request);
+  if (rankingTarget) {
+    const redirected = NextResponse.redirect(new URL(rankingTarget, request.url));
+    redirected.headers.set("Content-Security-Policy", csp);
+    redirected.headers.set("X-Frame-Options", "DENY");
+    return redirected;
+  }
+
+  const profileMatch = /^\/profiles\/([^/]+)$/.exec(request.nextUrl.pathname);
+  if (profileMatch) {
+    const param = decodeURIComponent(profileMatch[1] ?? "");
+    // Invalid identifiers never match a profile. Rewriting to an unmatched
+    // path renders the root not-found page (the in-page notFound() shell stays
+    // blank) and keeps the 404 status.
+    if (!isValidPubkeyOrNpubParam(param)) {
+      const url = request.nextUrl.clone();
+      url.pathname = "/__profile-not-found";
+      const rewrite = NextResponse.rewrite(url, { request: { headers: requestHeaders } });
+      rewrite.headers.set("Content-Security-Policy", csp);
+      rewrite.headers.set("X-Frame-Options", "DENY");
+      return rewrite;
+    }
+  }
+
+  const response = NextResponse.next({
+    request: { headers: requestHeaders },
+  });
+  response.headers.set("Content-Security-Policy", csp);
+  if (isEmbed) {
+    response.headers.delete("X-Frame-Options");
+  } else {
+    response.headers.set("X-Frame-Options", "DENY");
+  }
+  return response;
+}
+
+export const config = {
+  matcher: [
+    {
+      source: "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+      missing: [
+        { type: "header", key: "next-router-prefetch" },
+        { type: "header", key: "purpose", value: "prefetch" },
+      ],
+    },
+  ],
+};

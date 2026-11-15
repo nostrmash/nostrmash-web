@@ -1,0 +1,318 @@
+import type {
+  DiscoveryItemRanking,
+  DiscoveryRankingReason,
+  DiscoveryReasonEvidence,
+} from "@/lib/types/api";
+
+export type DiscoveryReasonPresentation = {
+  text: string;
+  support?: string;
+  code?: string;
+};
+
+function countPhrase(value: number, singular: string, plural: string): string {
+  const rounded = Math.round(value);
+  return `${rounded.toLocaleString()} ${rounded === 1 ? singular : plural}`;
+}
+
+/**
+ * One sentence a reader can say back. `combined_engagement` is not a reason;
+ * callers fall through to the next code. Unknown codes stay humanized.
+ */
+function reasonSentence(reason: DiscoveryRankingReason): string | null {
+  const evidence = reason.evidence?.[0];
+  const value = evidence && Number.isFinite(evidence.value) ? evidence.value : undefined;
+  const ratio = value !== undefined ? formatEvidenceValue(value, evidence?.unit) : undefined;
+  switch (reason.code) {
+    case "combined_engagement":
+      return null;
+    case "reply_velocity":
+      return value !== undefined
+        ? `${countPhrase(value, "reply", "replies")} are still arriving`
+        : "Replies are still arriving";
+    case "repost_lift":
+      return value !== undefined
+        ? `Reposted ${countPhrase(value, "time", "times")}`
+        : "Reposts are lifting it";
+    case "recent_engagement":
+      return value !== undefined
+        ? `${countPhrase(value, "reaction", "reactions")} in this window`
+        : "Recent reactions and replies";
+    case "zap_support":
+      return value !== undefined
+        ? `${countPhrase(value, "person", "people")} zapped it`
+        : "People are zapping it";
+    case "follower_growth":
+      return value !== undefined ? `Gained ${countPhrase(value, "follower", "followers")}` : null;
+    case "publishing_momentum":
+      return value !== undefined
+        ? `Published ${countPhrase(value, "note", "notes")} in this window`
+        : "Publishing more than usual";
+    case "engagement_received":
+      return value !== undefined
+        ? `${countPhrase(value, "interaction", "interactions")} in total`
+        : "Engagement is coming in";
+    case "engagement_quality":
+      return ratio !== undefined
+        ? `Each note gets about ${ratio} reactions, replies, and zaps`
+        : null;
+    case "relative_engagement_growth":
+      return ratio !== undefined
+        ? `About ${ratio} interactions for each follower`
+        : "More engagement than the audience size suggests";
+    case "mention_volume":
+      return value !== undefined
+        ? `Mentioned ${countPhrase(value, "time", "times")}`
+        : "Mentions are picking up";
+    case "author_breadth":
+      return value !== undefined
+        ? `Used by ${countPhrase(value, "person", "people")}`
+        : "Used by many different people";
+    case "link_circulation":
+      return value !== undefined
+        ? `Shared ${countPhrase(value, "time", "times")}`
+        : "The link is circulating";
+    case "recency":
+      return "Posted recently and already in this ranking";
+    case "conversation_velocity":
+      return value !== undefined
+        ? `The thread gained ${countPhrase(value, "reply", "replies")}`
+        : "The thread is growing quickly";
+    case "participant_breadth":
+      return value !== undefined
+        ? `${countPhrase(value, "person", "people")} joined the thread`
+        : "Many people joined the thread";
+    case "saved_by":
+      return value !== undefined
+        ? `Saved by ${countPhrase(value, "person", "people")}`
+        : "People have it saved";
+    case "zap_volume":
+      return value !== undefined
+        ? `${countPhrase(value, "sat", "sats")} in this window`
+        : "Sats received in this window";
+    case "audience_size":
+      return value !== undefined ? countPhrase(value, "follower", "followers") : "A large audience";
+    case "supporter_sats":
+      return value !== undefined
+        ? `${countPhrase(value, "sat", "sats")}, with each sender capped`
+        : "Supported by several people";
+    case "followed_engagers":
+      return value !== undefined
+        ? `${countPhrase(value, "account you follow", "accounts you follow")} engaged with it`
+        : "Accounts you follow engaged with it";
+    case "followed_zappers":
+      return value !== undefined
+        ? `${countPhrase(value, "sat", "sats")} from accounts you follow`
+        : "Accounts you follow zapped it";
+    case "followed_savers":
+      return value !== undefined
+        ? `Saved by ${countPhrase(value, "account you follow", "accounts you follow")}`
+        : "Accounts you follow saved it";
+    case "followed_replies":
+      return value !== undefined
+        ? `${countPhrase(value, "reply", "replies")} from accounts you follow`
+        : "Accounts you follow replied";
+    case "followed_by": {
+      const unit = evidence?.unit?.trim().toLowerCase() ?? "";
+      if (value === undefined) return "Accounts you follow are connected to it";
+      if (unit === "follower" || unit === "followers") {
+        return `${countPhrase(value, "new follower", "new followers")} from accounts you follow`;
+      }
+      return `Followed by ${countPhrase(value, "account you follow", "accounts you follow")}`;
+    }
+    case "followed_supporters":
+      return value !== undefined
+        ? `${countPhrase(value, "sat", "sats")} from accounts you follow`
+        : "Accounts you follow supported it";
+    case "followed_authors":
+      return value !== undefined
+        ? `${countPhrase(value, "author you follow", "authors you follow")} used it`
+        : "Accounts you follow used it";
+    default:
+      return null;
+  }
+}
+
+/**
+ * Reasons whose evidence is a count of discrete things (posts, followers,
+ * links…). A count of one is noise, not momentum, so these need at least two
+ * to be shown; otherwise the reason falls through to the next one.
+ */
+const COUNT_FLOOR_CODES = new Set([
+  "publishing_momentum",
+  "follower_growth",
+  "mention_volume",
+  "link_circulation",
+  "author_breadth",
+  "participant_breadth",
+]);
+const COUNT_FLOOR = 2;
+
+/**
+ * Ratio reasons ("per follower", "per note") below 1 are noise: 0.1
+ * interactions per follower is not a reason to be on the page. 1 and above
+ * stay, including values like 6.8 and 10.
+ */
+const RATE_FLOOR = 1;
+const RATE_CODES = new Set(["relative_engagement_growth", "engagement_quality"]);
+
+/** Reasons describing growth, where a leading "+" makes the number read as a delta. */
+const GROWTH_CODES = new Set(["follower_growth"]);
+
+/** Units that count whole things and must never render fractionally. */
+const COUNT_UNIT_PATTERN =
+  /^(followers?|posts?|notes?|repl(y|ies)|reposts?|interactions?|links?|mentions?|authors?|accounts?|zaps?|reactions?|sources?|relays?|participants?|shares?|appearances?|boosts?|likes?|people|person|sats?)$/i;
+
+function singularize(unit: string): string {
+  if (/^people$/i.test(unit)) return unit.startsWith("P") ? "Person" : "person";
+  if (/ies$/i.test(unit)) return unit.replace(/ies$/i, "y");
+  if (/s$/i.test(unit) && !/ss$/i.test(unit)) return unit.slice(0, -1);
+  return unit;
+}
+
+/**
+ * Round evidence for display: whole units are rounded to integers (3.75
+ * followers → 4 followers); ratios keep one decimal below 10 (8.214 → 8.2,
+ * 0.403 → 0.4) and none above. Three-decimal precision is false precision
+ * for a "why now" line.
+ */
+export function formatEvidenceValue(value: number, unit?: string): string {
+  if (!Number.isFinite(value)) return "";
+  const isCount = unit ? COUNT_UNIT_PATTERN.test(unit.trim()) : Number.isInteger(value);
+  if (isCount) return Math.round(value).toLocaleString();
+  if (Math.abs(value) >= 10) return Math.round(value).toLocaleString();
+  const rounded = Math.round(value * 10) / 10;
+  return rounded.toLocaleString(undefined, { maximumFractionDigits: 1 });
+}
+
+function humanizeCode(code: string): string {
+  return code.replace(/[_-]+/g, " ").trim().toLowerCase();
+}
+
+function formatEvidence(
+  evidence: DiscoveryReasonEvidence | undefined,
+  code: string
+): string | undefined {
+  if (!evidence) return undefined;
+  const rendered = formatEvidenceValue(evidence.value, evidence.unit);
+  if (!rendered) return undefined;
+  const sign = GROWTH_CODES.has(code) && evidence.value > 0 ? "+" : "";
+  if (!evidence.unit) return `${sign}${rendered}`;
+  const unit =
+    COUNT_UNIT_PATTERN.test(evidence.unit.trim()) && Math.round(evidence.value) === 1
+      ? singularize(evidence.unit.trim())
+      : evidence.unit.trim();
+  return `${sign}${rendered} ${unit}`;
+}
+
+function isRateEvidence(reason: DiscoveryRankingReason): boolean {
+  if (RATE_CODES.has(reason.code)) return true;
+  const unit = reason.evidence?.[0]?.unit ?? "";
+  return /\bper\b/i.test(unit);
+}
+
+function belowFloor(reason: DiscoveryRankingReason): boolean {
+  const evidence = reason.evidence?.[0];
+  if (!evidence || !Number.isFinite(evidence.value)) return false;
+  if (isRateEvidence(reason)) return evidence.value < RATE_FLOOR;
+  if (!COUNT_FLOOR_CODES.has(reason.code)) return false;
+  return evidence.value < COUNT_FLOOR;
+}
+
+/** Sources behind a rank. This is the figure the server order follows. */
+export function sourceCount(ranking: DiscoveryItemRanking | undefined): number | null {
+  const value = ranking?.source_breadth;
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
+  return Math.round(value);
+}
+
+/** Volume (events, links, posts) under 2 is the same floor as count reasons. */
+export function belowVolumeFloor(value: unknown): boolean {
+  return typeof value === "number" && Number.isFinite(value) && value < COUNT_FLOOR;
+}
+
+/**
+ * First positive volume among candidates. All-zero counts stay below the
+ * floor; a missing count does not, so a row without a volume figure is kept.
+ */
+export function listedVolume(values: unknown[]): number | undefined {
+  const numbers = values.filter(
+    (value): value is number => typeof value === "number" && Number.isFinite(value)
+  );
+  if (numbers.length === 0) return undefined;
+  return numbers.find((value) => value > 0) ?? numbers[0];
+}
+
+function presentReason(reason: DiscoveryRankingReason): DiscoveryReasonPresentation | null {
+  if (!reason.code || belowFloor(reason)) return null;
+  const sentence = reasonSentence(reason);
+  if (sentence) return { text: sentence, code: reason.code };
+  if (reason.code === "combined_engagement") return null;
+  // Unknown codes are still the server's actual ranking rationale; a humanized
+  // code beats falling back to inferred stats that may contradict the rank.
+  const text = humanizeCode(reason.code);
+  if (!text) return null;
+  return {
+    text,
+    support: formatEvidence(reason.evidence?.[0], reason.code),
+    code: reason.code,
+  };
+}
+
+/**
+ * Topic and link rows already print unique authors as the source figure.
+ * That count is the sort key, so the why-now line must not repeat it or
+ * fall through to volume, which is not the order.
+ */
+export function reasonsBesideSourceFigure<T extends { code?: string }>(
+  ranking: DiscoveryItemRanking | undefined,
+  reasons: T[]
+): T[] {
+  if (ranking?.reasons?.some((reason) => reason.code === "author_breadth")) return [];
+  if (sourceCount(ranking) != null && reasons.some((reason) => reason.code === "author_breadth")) {
+    return [];
+  }
+  return reasons;
+}
+
+export function mapServerRankingReasons(
+  ranking: DiscoveryItemRanking | undefined
+): DiscoveryReasonPresentation[] {
+  if (!ranking?.reasons?.length) return [];
+  const cohort = ranking.reasons.filter((reason) => reason.code.startsWith("followed_"));
+  const rest = ranking.reasons.filter((reason) => !reason.code.startsWith("followed_"));
+  const ordered = cohort.length > 0 ? [...cohort, ...rest] : ranking.reasons;
+  return ordered
+    .map(presentReason)
+    .filter((entry): entry is DiscoveryReasonPresentation => entry !== null);
+}
+
+export function discoveryReasonSource(
+  ranking: DiscoveryItemRanking | undefined
+): "server" | "inferred" {
+  return ranking?.reasons?.length ? "server" : "inferred";
+}
+
+export type RankMovement = { direction: "up" | "down"; places: number };
+
+/**
+ * Rank movement versus the previous computation. `previous_rank` is
+ * unambiguous (places moved = previous − current); `rank_delta` is used as a
+ * fallback with the same sign convention (positive = moved up).
+ */
+export function rankMovement(ranking: DiscoveryItemRanking | undefined): RankMovement | null {
+  if (!ranking) return null;
+  if (typeof ranking.previous_rank === "number" && Number.isFinite(ranking.previous_rank)) {
+    const delta = ranking.previous_rank - ranking.rank;
+    if (delta === 0) return null;
+    return { direction: delta > 0 ? "up" : "down", places: Math.abs(delta) };
+  }
+  if (typeof ranking.rank_delta === "number" && Number.isFinite(ranking.rank_delta)) {
+    if (ranking.rank_delta === 0) return null;
+    return {
+      direction: ranking.rank_delta > 0 ? "up" : "down",
+      places: Math.abs(ranking.rank_delta),
+    };
+  }
+  return null;
+}

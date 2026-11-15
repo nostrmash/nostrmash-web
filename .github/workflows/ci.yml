@@ -1,0 +1,182 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.18.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate (format, lint, typecheck)
+        run: pnpm validate
+
+      - name: Audit dependencies
+        run: pnpm audit:deps
+
+      - name: Test with coverage
+        run: pnpm test:coverage
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-lcov
+          path: coverage/lcov.info
+          if-no-files-found: ignore
+
+      - name: Build
+        run: pnpm build
+        env:
+          NOSTRMASH_API_BASE_URL: https://api.nostrmash.com
+
+  cf-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: quality
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.18.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Cloudflare OpenNext build
+        run: pnpm cf:build
+        env:
+          NOSTRMASH_API_BASE_URL: https://api.nostrmash.com
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: quality
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.18.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        run: pnpm test:e2e:install
+
+      - name: Build
+        run: pnpm build
+        env:
+          NOSTRMASH_API_BASE_URL: http://127.0.0.1:8080
+
+      - name: Smoke e2e
+        run: pnpm test:e2e
+        env:
+          CI: "true"
+          NOSTRMASH_API_BASE_URL: http://127.0.0.1:8080
+
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: [quality, cf-build, e2e]
+    environment: production
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.18.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Cloudflare OpenNext build
+        run: pnpm cf:build
+        env:
+          NOSTRMASH_API_BASE_URL: https://api.nostrmash.com
+          NEXT_PUBLIC_SITE_URL: https://nostrmash.com
+          NEXT_PUBLIC_SENTRY_DSN: ${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+
+      - name: Deploy to Cloudflare Workers
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy --keep-vars
+
+  prod-validate:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [deploy]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Validate production SEO/security surface
+        env:
+          PROD_VALIDATE_TOKEN: ${{ secrets.PROD_VALIDATE_TOKEN }}
+        run: node scripts/prod-validate.mjs https://nostrmash.com

@@ -1,0 +1,485 @@
+import type {
+  AuthorEventsApiResponse,
+  AuthorEventsResponse,
+  AuthorReactionsApiResponse,
+  AuthorReactionsResponse,
+  AuthorRepliesApiResponse,
+  AuthorRepliesResponse,
+  AuthorZapsApiResponse,
+  AuthorZapsResponse,
+  BatchProfilesApiResponse,
+  Profile,
+  ProfileApiResponse,
+  ProfileSummaryApiResponse,
+  RelatedProfilesApiResponse,
+  RelatedProfilesResponse,
+  UserBookmarksApiResponse,
+  UserBookmarksResponse,
+  UserHighlightsApiResponse,
+  UserHighlightsResponse,
+  UserLiveActivitiesApiResponse,
+  UserLiveActivitiesResponse,
+  UserLongFormApiResponse,
+  UserLongFormResponse,
+  UserMediaApiResponse,
+  UserMediaResponse,
+  UserPinsApiResponse,
+  UserPinsResponse,
+  ReportsApiResponse,
+  ReportsResponse,
+  UserMuteListApiResponse,
+  UserMuteListResponse,
+  UserMutedByApiResponse,
+  UserMutedByResponse,
+  AuthorAnalyticsSummary,
+  AuthorZapAnalytics,
+  ProfileIdentity,
+} from "@/lib/types/api";
+import { ApiError, fetchApiJson } from "@/lib/api/http";
+import {
+  normalizeAuthorEventsResponse,
+  normalizeAuthorReactionsResponse,
+  normalizeAuthorRepliesResponse,
+  normalizeAuthorZapsResponse,
+  normalizeProfile,
+  normalizeProfiles,
+  normalizeProfileSummaryResponse,
+  normalizeRelatedProfilesResponse,
+  normalizeUserBookmarksResponse,
+  normalizeUserHighlightsResponse,
+  normalizeUserLiveActivitiesResponse,
+  normalizeUserLongFormResponse,
+  normalizeUserMediaResponse,
+  normalizeUserPinsResponse,
+  normalizeReportsResponse,
+  normalizeUserMuteListResponse,
+  normalizeUserMutedByResponse,
+} from "@/lib/api/normalize";
+import {
+  normalizeAuthorAnalyticsSummary,
+  normalizeAuthorZapAnalytics,
+  normalizeProfileIdentity,
+} from "@/lib/api/normalize/ecosystem";
+import {
+  authorAnalyticsSummarySchema,
+  authorZapAnalyticsSchema,
+  profileIdentitySchema,
+} from "@/lib/api/schemas/ecosystem";
+import type { CacheClass } from "@/lib/caching/policies";
+import type { StatsWindow } from "@/lib/search-params/window";
+import {
+  buildCursorQuery,
+  type CursorQuery,
+  nativeApiV1Routes,
+  withPubkeyCandidates,
+} from "@/lib/api/endpoints/shared";
+
+export async function getProfile(pubkey: string, cacheClass: CacheClass = "shortTtl") {
+  return withPubkeyCandidates(
+    pubkey,
+    async (candidate) => {
+      const response = await fetchApiJson<ProfileApiResponse>(
+        nativeApiV1Routes.profileByPubkey(candidate),
+        { cacheClass }
+      );
+      const profile = normalizeProfile(response);
+      if (!profile) {
+        throw new Error("API returned an invalid profile payload.");
+      }
+      return profile;
+    },
+    "Profile lookup failed."
+  );
+}
+
+export async function getProfilesBatch(pubkeys: string[], cacheClass: CacheClass = "shortTtl") {
+  const normalizedPubkeys = Array.from(
+    new Set(pubkeys.map((pubkey) => pubkey.trim()).filter((pubkey) => pubkey.length > 0))
+  );
+
+  if (normalizedPubkeys.length === 0) {
+    return [] as Profile[];
+  }
+
+  const response = await fetchApiJson<BatchProfilesApiResponse>(nativeApiV1Routes.profilesBatch, {
+    cacheClass,
+    init: {
+      method: "POST",
+      body: JSON.stringify({ pubkeys: normalizedPubkeys }),
+      headers: {
+        "Content-Type": "application/json",
+      },
+    },
+  });
+
+  return normalizeProfiles(response.profiles);
+}
+
+export async function getProfileSummary(pubkey: string, cacheClass: CacheClass = "shortTtl") {
+  return withPubkeyCandidates(
+    pubkey,
+    async (candidate) => {
+      const response = await fetchApiJson<ProfileSummaryApiResponse>(
+        nativeApiV1Routes.profileSummaryByPubkey(candidate),
+        { cacheClass }
+      );
+      return normalizeProfileSummaryResponse(response);
+    },
+    "Profile summary lookup failed."
+  );
+}
+
+export async function getUserLongForm(
+  pubkey: string,
+  cacheClass: CacheClass = "shortTtl",
+  query?: CursorQuery
+): Promise<UserLongFormResponse> {
+  return withPubkeyCandidates(
+    pubkey,
+    async (candidate) => {
+      const response = await fetchApiJson<UserLongFormApiResponse>(
+        nativeApiV1Routes.userLongFormByPubkey(candidate),
+        {
+          cacheClass,
+          query: buildCursorQuery(query),
+        }
+      );
+      return normalizeUserLongFormResponse(response);
+    },
+    "User long-form lookup failed."
+  );
+}
+
+export async function getUserBookmarks(
+  pubkey: string,
+  cacheClass: CacheClass = "shortTtl",
+  query?: CursorQuery
+): Promise<UserBookmarksResponse> {
+  return withPubkeyCandidates(
+    pubkey,
+    async (candidate) => {
+      const response = await fetchApiJson<UserBookmarksApiResponse>(
+        nativeApiV1Routes.userBookmarksByPubkey(candidate),
+        {
+          cacheClass,
+          query: buildCursorQuery(query),
+        }
+      );
+      return normalizeUserBookmarksResponse(response);
+    },
+    "User bookmarks lookup failed."
+  );
+}
+
+export async function getUserHighlights(
+  pubkey: string,
+  cacheClass: CacheClass = "shortTtl",
+  query?: CursorQuery
+): Promise<UserHighlightsResponse> {
+  return withPubkeyCandidates(
+    pubkey,
+    async (candidate) => {
+      const response = await fetchApiJson<UserHighlightsApiResponse>(
+        nativeApiV1Routes.userHighlightsByPubkey(candidate),
+        {
+          cacheClass,
+          query: buildCursorQuery(query),
+        }
+      );
+      return normalizeUserHighlightsResponse(response);
+    },
+    "User highlights lookup failed."
+  );
+}
+
+export async function getUserMedia(
+  pubkey: string,
+  cacheClass: CacheClass = "shortTtl",
+  query?: CursorQuery
+): Promise<UserMediaResponse> {
+  return withPubkeyCandidates(
+    pubkey,
+    async (candidate) => {
+      const response = await fetchApiJson<UserMediaApiResponse>(
+        nativeApiV1Routes.userMediaByPubkey(candidate),
+        {
+          cacheClass,
+          query: buildCursorQuery(query),
+        }
+      );
+      return normalizeUserMediaResponse(response);
+    },
+    "User media lookup failed."
+  );
+}
+
+export async function getUserLiveActivities(
+  pubkey: string,
+  cacheClass: CacheClass = "shortTtl",
+  query?: CursorQuery
+): Promise<UserLiveActivitiesResponse> {
+  return withPubkeyCandidates(
+    pubkey,
+    async (candidate) => {
+      const response = await fetchApiJson<UserLiveActivitiesApiResponse>(
+        nativeApiV1Routes.userLiveByPubkey(candidate),
+        {
+          cacheClass,
+          query: buildCursorQuery(query),
+        }
+      );
+      return normalizeUserLiveActivitiesResponse(response);
+    },
+    "User live activities lookup failed."
+  );
+}
+
+export async function getUserPins(
+  pubkey: string,
+  cacheClass: CacheClass = "shortTtl",
+  query?: CursorQuery
+): Promise<UserPinsResponse> {
+  return withPubkeyCandidates(
+    pubkey,
+    async (candidate) => {
+      const response = await fetchApiJson<UserPinsApiResponse>(
+        nativeApiV1Routes.userPinsByPubkey(candidate),
+        {
+          cacheClass,
+          query: buildCursorQuery(query),
+        }
+      );
+      return normalizeUserPinsResponse(response);
+    },
+    "User pins lookup failed."
+  );
+}
+
+export async function getUserReports(
+  pubkey: string,
+  cacheClass: CacheClass = "shortTtl"
+): Promise<ReportsResponse> {
+  return withPubkeyCandidates(
+    pubkey,
+    async (candidate) => {
+      const response = await fetchApiJson<ReportsApiResponse>(
+        nativeApiV1Routes.userReportsByPubkey(candidate),
+        { cacheClass }
+      );
+      return normalizeReportsResponse(response);
+    },
+    "User reports lookup failed."
+  );
+}
+
+export async function getUserMuteList(
+  pubkey: string,
+  cacheClass: CacheClass = "shortTtl",
+  query?: CursorQuery
+): Promise<UserMuteListResponse> {
+  return withPubkeyCandidates(
+    pubkey,
+    async (candidate) => {
+      const response = await fetchApiJson<UserMuteListApiResponse>(
+        nativeApiV1Routes.userMuteListByPubkey(candidate),
+        {
+          cacheClass,
+          query: buildCursorQuery(query),
+        }
+      );
+      return normalizeUserMuteListResponse(response);
+    },
+    "User mute list lookup failed."
+  );
+}
+
+export async function getUserMutedBy(
+  pubkey: string,
+  cacheClass: CacheClass = "shortTtl",
+  query?: CursorQuery
+): Promise<UserMutedByResponse> {
+  return withPubkeyCandidates(
+    pubkey,
+    async (candidate) => {
+      const response = await fetchApiJson<UserMutedByApiResponse>(
+        nativeApiV1Routes.userMutedByByPubkey(candidate),
+        {
+          cacheClass,
+          query: buildCursorQuery(query),
+        }
+      );
+      return normalizeUserMutedByResponse(response);
+    },
+    "User muted-by lookup failed."
+  );
+}
+
+export async function getRelatedProfiles(
+  pubkey: string,
+  cacheClass: CacheClass = "shortTtl",
+  query?: CursorQuery
+): Promise<RelatedProfilesResponse> {
+  return withPubkeyCandidates(
+    pubkey,
+    async (candidate) => {
+      const response = await fetchApiJson<RelatedProfilesApiResponse>(
+        nativeApiV1Routes.relatedProfilesByPubkey(candidate),
+        {
+          cacheClass,
+          query: buildCursorQuery(query),
+        }
+      );
+      return normalizeRelatedProfilesResponse(response);
+    },
+    "Related profiles lookup failed."
+  );
+}
+
+export async function getAuthorEvents(
+  pubkey: string,
+  cacheClass: CacheClass = "shortTtl",
+  query?: CursorQuery
+): Promise<AuthorEventsResponse> {
+  return withPubkeyCandidates(
+    pubkey,
+    async (candidate) => {
+      const response = await fetchApiJson<AuthorEventsApiResponse>(
+        nativeApiV1Routes.authorEventsByPubkey(candidate),
+        {
+          cacheClass,
+          query: buildCursorQuery(query),
+        }
+      );
+      return normalizeAuthorEventsResponse(response);
+    },
+    "Author events lookup failed."
+  );
+}
+
+export async function getAuthorReplies(
+  pubkey: string,
+  cacheClass: CacheClass = "shortTtl",
+  query?: CursorQuery
+): Promise<AuthorRepliesResponse> {
+  return withPubkeyCandidates(
+    pubkey,
+    async (candidate) => {
+      const response = await fetchApiJson<AuthorRepliesApiResponse>(
+        nativeApiV1Routes.authorRepliesByPubkey(candidate),
+        {
+          cacheClass,
+          query: buildCursorQuery(query),
+        }
+      );
+      return normalizeAuthorRepliesResponse(response);
+    },
+    "Author replies lookup failed."
+  );
+}
+
+export async function getAuthorReactions(
+  pubkey: string,
+  cacheClass: CacheClass = "shortTtl",
+  query?: CursorQuery
+): Promise<AuthorReactionsResponse> {
+  return withPubkeyCandidates(
+    pubkey,
+    async (candidate) => {
+      const response = await fetchApiJson<AuthorReactionsApiResponse>(
+        nativeApiV1Routes.authorReactionsByPubkey(candidate),
+        {
+          cacheClass,
+          query: buildCursorQuery(query),
+        }
+      );
+      return normalizeAuthorReactionsResponse(response);
+    },
+    "Author reactions lookup failed."
+  );
+}
+
+export async function getAuthorZaps(
+  pubkey: string,
+  cacheClass: CacheClass = "shortTtl",
+  query?: CursorQuery
+): Promise<AuthorZapsResponse> {
+  return withPubkeyCandidates(
+    pubkey,
+    async (candidate) => {
+      const response = await fetchApiJson<AuthorZapsApiResponse>(
+        nativeApiV1Routes.authorZapsByPubkey(candidate),
+        {
+          cacheClass,
+          query: buildCursorQuery(query),
+        }
+      );
+      return normalizeAuthorZapsResponse(response);
+    },
+    "Author zaps lookup failed."
+  );
+}
+
+export async function getAuthorZapAnalytics(
+  pubkey: string,
+  cacheClass: CacheClass = "requestTime",
+  window?: StatsWindow
+): Promise<AuthorZapAnalytics> {
+  return withPubkeyCandidates(
+    pubkey,
+    async (candidate) => {
+      const response = await fetchApiJson<unknown>(
+        nativeApiV1Routes.authorZapAnalytics(candidate),
+        {
+          cacheClass,
+          query: window ? { window } : undefined,
+          schema: authorZapAnalyticsSchema,
+        }
+      );
+      return normalizeAuthorZapAnalytics(response);
+    },
+    "Author zap analytics lookup failed."
+  );
+}
+
+export async function getAuthorAnalyticsSummary(
+  pubkey: string,
+  cacheClass: CacheClass = "requestTime"
+): Promise<AuthorAnalyticsSummary> {
+  return withPubkeyCandidates(
+    pubkey,
+    async (candidate) => {
+      const response = await fetchApiJson<unknown>(
+        nativeApiV1Routes.authorAnalyticsSummary(candidate),
+        {
+          cacheClass,
+          schema: authorAnalyticsSummarySchema,
+        }
+      );
+      return normalizeAuthorAnalyticsSummary(response);
+    },
+    "Author analytics lookup failed."
+  );
+}
+
+/** 404 means the profile has no projected identity yet. Callers hide that section. */
+export async function getProfileIdentity(
+  pubkey: string,
+  cacheClass: CacheClass = "requestTime"
+): Promise<ProfileIdentity | null> {
+  try {
+    return await withPubkeyCandidates(
+      pubkey,
+      async (candidate) => {
+        const response = await fetchApiJson<unknown>(nativeApiV1Routes.profileIdentity(candidate), {
+          cacheClass,
+          schema: profileIdentitySchema,
+        });
+        return normalizeProfileIdentity(response);
+      },
+      "Profile identity lookup failed."
+    );
+  } catch (error) {
+    if (error instanceof ApiError && error.isNotFound) return null;
+    throw error;
+  }
+}

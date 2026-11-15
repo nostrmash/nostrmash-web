@@ -1,0 +1,157 @@
+import Link from "@/components/app-link";
+
+import { Pill, type PillTone } from "@/components/ui/pill";
+import { formatMetricLabel, formatValue, truncateMiddle } from "@/components/explorer/utils";
+
+export type CardTier = "standard" | "compact" | "utility";
+export type { PillTone };
+
+const TIER_SURFACE: Record<CardTier, string> = {
+  standard:
+    "border-b border-edge/65 bg-transparent px-1 py-5 transition-colors hover:bg-surface/25 sm:px-2 sm:py-6",
+  compact: "rounded-lg bg-surface-sunken/45 px-3 py-2.5",
+  utility: "rounded-xl border border-edge/65 bg-surface/55 p-4",
+};
+
+export type DiscoveryAction = {
+  label: string;
+  href?: string | null;
+};
+
+export function cardTierClassName(tier: CardTier): string {
+  return TIER_SURFACE[tier];
+}
+
+/**
+ * Raise nested controls above `CardHitTarget` so they stay clickable.
+ * Overlay controls keep their own position (a picture carousel's arrows).
+ */
+export const cardHitTargetClassName =
+  "relative cursor-pointer [&_a:not([data-card-hit-target])]:relative [&_a:not([data-card-hit-target])]:z-[2] [&_button:not([data-overlay-control])]:relative [&_button:not([data-overlay-control])]:z-[2] [&_video]:relative [&_video]:z-[2] [&_audio]:relative [&_audio]:z-[2] [&_iframe]:relative [&_iframe]:z-[2]";
+
+export function CardHitTarget({ href, label }: { href: string; label: string }) {
+  return (
+    <Link href={href} aria-label={label} data-card-hit-target className="absolute inset-0 z-[1]" />
+  );
+}
+
+export function DiscoveryPill({
+  tone,
+  children,
+  className = "",
+}: {
+  tone: PillTone;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <Pill tone={tone} className={className}>
+      {children}
+    </Pill>
+  );
+}
+
+const STAT_PILL_SIZE = {
+  xs: "text-xs",
+  sm: "text-[13px]",
+  md: "text-sm",
+} as const;
+
+function isZeroStat(value: unknown): boolean {
+  if (typeof value === "number") return value === 0;
+  if (typeof value === "string") return value.trim() === "" || value.trim() === "0";
+  return value === null || value === undefined;
+}
+
+export function DiscoveryStatPills({
+  stats,
+  className = "",
+  compact = false,
+  size,
+  replacements,
+  omitZero = false,
+  omitLabels,
+}: {
+  stats: Array<{ label: string; value: unknown; detail?: string }>;
+  className?: string;
+  compact?: boolean;
+  size?: keyof typeof STAT_PILL_SIZE;
+  /** Swap a stat (keyed by its raw label, e.g. `repost_count`) for a control. */
+  replacements?: Partial<Record<string, React.ReactNode>>;
+  /** Hide stats whose value is zero. Discover lists leave zeros visible. */
+  omitZero?: boolean;
+  /** Raw stat keys already printed elsewhere on the row, such as `reply_count`. */
+  omitLabels?: string[];
+}) {
+  const hidden = new Set(omitLabels ?? []);
+  const visible = (omitZero ? stats.filter((stat) => !isZeroStat(stat.value)) : stats).filter(
+    (stat) => !hidden.has(stat.label)
+  );
+  if (visible.length === 0) return null;
+  const sizeClass = STAT_PILL_SIZE[size ?? (compact ? "xs" : "sm")];
+  return (
+    <div
+      className={`flex flex-wrap items-center gap-x-2.5 gap-y-1.5 ${sizeClass} ${className}`.trim()}
+    >
+      {visible.map((metric, index) => {
+        const replacement = replacements?.[metric.label];
+        return (
+          <span
+            key={metric.label}
+            className={replacement ? "contents" : "inline-flex items-center gap-1.5"}
+          >
+            {index > 0 ? (
+              <span aria-hidden className="text-ink-faint/70">
+                •
+              </span>
+            ) : null}
+            {replacement ?? (
+              <>
+                <span className="text-ink-faint">{formatMetricLabel(metric.label)}</span>
+                <span className="text-ink-soft font-medium">
+                  {truncateMiddle(formatValue(metric.value), compact ? 14 : 18)}
+                </span>
+                {metric.detail ? <span className="text-ink-muted">({metric.detail})</span> : null}
+              </>
+            )}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+export function DiscoveryActionLinks({
+  actions,
+  className = "",
+}: {
+  actions: DiscoveryAction[];
+  className?: string;
+}) {
+  const visibleActions = actions.filter(
+    (action): action is { label: string; href: string } =>
+      typeof action.href === "string" && action.href.length > 0
+  );
+  if (visibleActions.length === 0) return null;
+  return (
+    <div
+      className={`text-ink-muted flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[13px] ${className}`.trim()}
+    >
+      {visibleActions.map((action, index) => (
+        <span key={action.label} className="inline-flex items-center gap-2">
+          {index > 0 ? (
+            <span aria-hidden className="text-ink-faint/70">
+              •
+            </span>
+          ) : null}
+          <Link
+            href={action.href}
+            className="focus-visible:ring-accent-soft/70 text-link hover:text-link-hover inline-flex min-h-6 items-center rounded-sm transition-colors focus-visible:ring-2 focus-visible:outline-none"
+          >
+            {action.label}
+          </Link>
+        </span>
+      ))}
+    </div>
+  );
+}

@@ -1,0 +1,435 @@
+import type { SearchResponse } from "@/lib/types/api";
+import { ApiError, isApiTimeoutError } from "@/lib/api/http";
+import { normalizeEventRecord, normalizeEventRecords } from "@/lib/api/normalize";
+import { npubToHex } from "@/lib/nostr/npub";
+import { parseViewer } from "@/lib/search-params/viewer";
+import { isStatsWindow } from "@/lib/search-params/window";
+
+export type SearchTab = "all" | "notes" | "profiles" | "hashtags" | "relays";
+export type SearchWindow = "24h" | "7d" | "30d" | "all";
+export type SearchSort = "relevant" | "latest";
+
+export interface SearchQuery {
+  q: string;
+  tab?: SearchTab;
+  limit?: number;
+  offset?: number;
+  /** Opaque continuation token from a prior response's next_cursor. */
+  cursor?: string;
+  /** Opt-in search bundle extras, e.g. "suggest". */
+  include?: string;
+  /** "0" asks the index not to replace the query with a spelling correction. */
+  correction?: "0";
+  /** ISO 639-1/2 code. Omitted means every language. */
+  lang?: string;
+  /** Omitted means the index default, all time. */
+  window?: Exclude<SearchWindow, "all">;
+  /** Omitted means the index default, relevant. */
+  sort?: Exclude<SearchSort, "relevant">;
+}
+
+export const nativeApiV1Routes = {
+  discoveryHome: "/api/v1/discovery/home",
+  search: "/api/v1/search",
+  searchNotes: "/api/v1/search/notes",
+  searchProfiles: "/api/v1/search/profiles",
+  searchSuggest: "/api/v1/search/suggest",
+  profilesBatch: "/api/v1/profiles/batch",
+  profileByPubkey: (pubkey: string) => `/api/v1/profiles/${encodeURIComponent(pubkey)}`,
+  profileSummaryByPubkey: (pubkey: string) => `/api/v1/users/${encodeURIComponent(pubkey)}/summary`,
+  userLongFormByPubkey: (pubkey: string) => `/api/v1/users/${encodeURIComponent(pubkey)}/long-form`,
+  userBookmarksByPubkey: (pubkey: string) =>
+    `/api/v1/users/${encodeURIComponent(pubkey)}/bookmarks`,
+  userHighlightsByPubkey: (pubkey: string) =>
+    `/api/v1/users/${encodeURIComponent(pubkey)}/highlights`,
+  userMediaByPubkey: (pubkey: string) => `/api/v1/users/${encodeURIComponent(pubkey)}/media`,
+  userLiveByPubkey: (pubkey: string) => `/api/v1/users/${encodeURIComponent(pubkey)}/live`,
+  userPinsByPubkey: (pubkey: string) => `/api/v1/users/${encodeURIComponent(pubkey)}/pins`,
+  userReportsByPubkey: (pubkey: string) => `/api/v1/users/${encodeURIComponent(pubkey)}/reports`,
+  liveActivities: "/api/v1/live",
+  userMuteListByPubkey: (pubkey: string) => `/api/v1/users/${encodeURIComponent(pubkey)}/mute-list`,
+  userMutedByByPubkey: (pubkey: string) => `/api/v1/users/${encodeURIComponent(pubkey)}/muted-by`,
+  relatedProfilesByPubkey: (pubkey: string) =>
+    `/api/v1/discovery/profiles/${encodeURIComponent(pubkey)}/related`,
+  authorEventsByPubkey: (pubkey: string) => `/api/v1/authors/${encodeURIComponent(pubkey)}/events`,
+  authorRepliesByPubkey: (pubkey: string) =>
+    `/api/v1/authors/${encodeURIComponent(pubkey)}/replies`,
+  authorReactionsByPubkey: (pubkey: string) =>
+    `/api/v1/authors/${encodeURIComponent(pubkey)}/reactions`,
+  authorZapsByPubkey: (pubkey: string) => `/api/v1/authors/${encodeURIComponent(pubkey)}/zaps`,
+  eventById: (eventId: string) => `/api/v1/events/${encodeURIComponent(eventId)}`,
+  eventsBatch: "/api/v1/events/batch",
+  eventAncestorsById: (eventId: string) =>
+    `/api/v1/events/${encodeURIComponent(eventId)}/ancestors`,
+  eventRepliesById: (eventId: string) => `/api/v1/events/${encodeURIComponent(eventId)}/replies`,
+  eventSeenOnById: (eventId: string) => `/api/v1/events/${encodeURIComponent(eventId)}/seen-on`,
+  eventCountsById: (eventId: string) => `/api/v1/events/${encodeURIComponent(eventId)}/counts`,
+  eventCommentsById: (eventId: string) => `/api/v1/events/${encodeURIComponent(eventId)}/comments`,
+  eventReportsById: (eventId: string) => `/api/v1/events/${encodeURIComponent(eventId)}/reports`,
+  threadByEventId: (eventId: string) => `/api/v1/threads/${encodeURIComponent(eventId)}`,
+  threadSummaryByRootEventId: (rootEventId: string) =>
+    `/api/v1/threads/${encodeURIComponent(rootEventId)}/summary`,
+  threadActivityByRootEventId: (rootEventId: string) =>
+    `/api/v1/threads/${encodeURIComponent(rootEventId)}/activity`,
+  noteSummaryByEventId: (eventId: string) => `/api/v1/notes/${encodeURIComponent(eventId)}/summary`,
+  noteRelatedByEventId: (eventId: string) => `/api/v1/notes/${encodeURIComponent(eventId)}/related`,
+  trendingNotes: "/api/v1/discovery/notes/trending",
+  bookmarkedNotes: "/api/v1/discovery/notes/bookmarked",
+  zappedNotes: "/api/v1/discovery/notes/zapped",
+  trendingLongForm: "/api/v1/discovery/long-form/trending",
+  trendingMedia: "/api/v1/discovery/media/trending",
+  trendingProfiles: "/api/v1/discovery/profiles/trending",
+  hotConversations: "/api/v1/discovery/conversations/hot",
+  risingProfiles: "/api/v1/discovery/profiles/rising",
+  followedProfiles: "/api/v1/discovery/profiles/followed",
+  supportedProfiles: "/api/v1/discovery/profiles/supported",
+  trendingHashtags: "/api/v1/discovery/hashtags/trending",
+  trendingDomains: "/api/v1/discovery/domains/trending",
+  hashtagByName: (hashtag: string) => `/api/v1/discovery/hashtags/${encodeURIComponent(hashtag)}`,
+  hashtagNotesByName: (hashtag: string) =>
+    `/api/v1/discovery/hashtags/${encodeURIComponent(hashtag)}/notes`,
+  hashtagRelatedByName: (hashtag: string) =>
+    `/api/v1/discovery/hashtags/${encodeURIComponent(hashtag)}/related`,
+  domainByName: (domain: string) => `/api/v1/discovery/domains/${encodeURIComponent(domain)}`,
+  domainNotesByName: (domain: string) =>
+    `/api/v1/discovery/domains/${encodeURIComponent(domain)}/notes`,
+  networkStats: "/api/v1/discovery/stats/network",
+  contentStats: "/api/v1/discovery/stats/content",
+  relayStats: "/api/v1/discovery/stats/relays",
+  statsSeries: "/api/v1/discovery/stats/series",
+  clientStats: "/api/v1/discovery/stats/clients",
+  identityStats: "/api/v1/discovery/stats/identity",
+  zapStats: "/api/v1/discovery/stats/zaps",
+  accountStats: "/api/v1/discovery/stats/accounts",
+  relayHealth: "/api/v1/relays/health",
+  relayPopular: "/api/v1/relays/popular",
+  relayInfo: "/api/v1/relays/info",
+  relayProbeHealth: "/api/v1/relays/probe-health",
+  relayPropagation: "/api/v1/relays/propagation",
+  relayOverlap: "/api/v1/relays/overlap",
+  authorAnalyticsSummary: (pubkey: string) =>
+    `/api/v1/authors/${encodeURIComponent(pubkey)}/analytics/summary`,
+  authorAnalyticsTopics: (pubkey: string) =>
+    `/api/v1/authors/${encodeURIComponent(pubkey)}/analytics/topics`,
+  authorAnalyticsPostingPatterns: (pubkey: string) =>
+    `/api/v1/authors/${encodeURIComponent(pubkey)}/analytics/posting-patterns`,
+  authorAnalyticsTopNotes: (pubkey: string) =>
+    `/api/v1/authors/${encodeURIComponent(pubkey)}/analytics/top-notes`,
+  authorAnalyticsPerformance: (pubkey: string) =>
+    `/api/v1/authors/${encodeURIComponent(pubkey)}/analytics/performance-summary`,
+  authorZapAnalytics: (pubkey: string) =>
+    `/api/v1/authors/${encodeURIComponent(pubkey)}/analytics/zaps`,
+  profileIdentity: (pubkey: string) => `/api/v1/profiles/${encodeURIComponent(pubkey)}/identity`,
+  eventLabels: (eventId: string) => `/api/v1/events/${encodeURIComponent(eventId)}/labels`,
+  eventPoll: (eventId: string) => `/api/v1/events/${encodeURIComponent(eventId)}/poll`,
+  eventGoal: (eventId: string) => `/api/v1/events/${encodeURIComponent(eventId)}/goal`,
+  groups: "/api/v1/groups",
+  group: (relayHost: string, groupId: string) =>
+    `/api/v1/groups/${encodeURIComponent(relayHost)}/${encodeURIComponent(groupId)}`,
+  groupMessages: (relayHost: string, groupId: string) =>
+    `/api/v1/groups/${encodeURIComponent(relayHost)}/${encodeURIComponent(groupId)}/messages`,
+  relayGroups: (relayHost: string) => `/api/v1/relays/${encodeURIComponent(relayHost)}/groups`,
+  groupStats: "/api/v1/discovery/stats/groups",
+  liveChat: (address: string) => `/api/v1/live/${encodeURIComponent(address)}/chat`,
+  polls: "/api/v1/discovery/polls",
+  pollStats: "/api/v1/discovery/stats/polls",
+  profileBadges: (pubkey: string) => `/api/v1/profiles/${encodeURIComponent(pubkey)}/badges`,
+  badge: (address: string) => `/api/v1/badges/${encodeURIComponent(address)}`,
+  badgeStats: "/api/v1/discovery/stats/badges",
+  goals: "/api/v1/discovery/goals",
+  profileStatus: (pubkey: string) => `/api/v1/profiles/${encodeURIComponent(pubkey)}/status`,
+  curationSets: "/api/v1/discovery/curation-sets",
+  curationSet: (address: string) => `/api/v1/curation-sets/${encodeURIComponent(address)}`,
+  profileInterests: (pubkey: string) => `/api/v1/profiles/${encodeURIComponent(pubkey)}/interests`,
+  profileLists: (pubkey: string) => `/api/v1/profiles/${encodeURIComponent(pubkey)}/lists`,
+  profileLabels: (pubkey: string) => `/api/v1/profiles/${encodeURIComponent(pubkey)}/labels`,
+  profileExternalIdentities: (pubkey: string) =>
+    `/api/v1/profiles/${encodeURIComponent(pubkey)}/external-identities`,
+  profileModeration: (pubkey: string) =>
+    `/api/v1/profiles/${encodeURIComponent(pubkey)}/moderation`,
+  kindStats: "/api/v1/discovery/stats/kinds",
+  conversationStats: "/api/v1/discovery/stats/conversations",
+  zapLeaderboard: "/api/v1/discovery/zaps/leaderboard",
+  zapHeatmap: "/api/v1/discovery/stats/zaps/heatmap",
+  emergingHashtags: "/api/v1/hashtags/emerging",
+  emergingDomains: "/api/v1/discovery/domains/emerging",
+  discoveryArchive: "/api/v1/discovery/archive",
+  relayCoverageChanges: "/api/v1/relays/coverage-changes",
+  hashtagHistory: (tag: string) => `/api/v1/hashtags/${encodeURIComponent(tag)}/history`,
+  deletionStats: "/api/v1/discovery/stats/deletions",
+  moderationStats: "/api/v1/discovery/stats/moderation",
+  spamStats: "/api/v1/discovery/stats/spam",
+  relayListStats: "/api/v1/discovery/stats/relay-lists",
+  relayHealthHistory: (relayHost: string) =>
+    `/api/v1/relays/${encodeURIComponent(relayHost)}/health/history`,
+  relaySoftwareStats: "/api/v1/discovery/stats/relay-software",
+  mediaHostStats: "/api/v1/discovery/stats/media-hosts",
+  labelStats: "/api/v1/discovery/stats/labels",
+  emojiStats: "/api/v1/discovery/stats/emoji",
+} as const;
+
+export interface CursorQuery {
+  cursor?: string;
+  limit?: number;
+  offset?: number;
+  window?: string;
+  /** Lowercase ISO 639-1/639-2 code. Omitted means all languages. */
+  lang?: string;
+  /** Optional Nostr kind filter (e.g. 1 for short text notes). */
+  kind?: number;
+  /** Hex pubkey or npub. Omitted for the global ranking. Invalid values are dropped. */
+  viewer?: string;
+}
+
+export interface OffsetQuery {
+  limit?: number;
+  offset?: number;
+  window?: string;
+  /** Lowercase ISO 639-1/639-2 code. Omitted means all languages. */
+  lang?: string;
+  /** Hex pubkey or npub. Omitted for the global ranking. Invalid values are dropped. */
+  viewer?: string;
+}
+
+/** Query fragment for a viewer. Invalid and empty values are omitted. */
+export function viewerQueryParam(viewer: string | undefined): { viewer: string } | undefined {
+  const parsed = parseViewer(viewer);
+  return parsed ? { viewer: parsed } : undefined;
+}
+
+export function buildOffsetQuery(
+  query?: OffsetQuery
+): Record<string, string | number | undefined> | undefined {
+  if (!query) return undefined;
+  return {
+    limit: query.limit,
+    offset: query.offset,
+    window: query.window,
+    ...(query.lang ? { lang: query.lang } : {}),
+    ...viewerQueryParam(query.viewer),
+  };
+}
+
+export const normalizeSearchQueryText = (value: string): string =>
+  value
+    .trim()
+    .replace(/^nostr:/i, "")
+    .replace(/^@/, "");
+
+export const normalizeProfileSearchQueryText = (value: string): string => {
+  const normalized = normalizeSearchQueryText(value);
+  if (!normalized.toLowerCase().startsWith("npub1")) return normalized;
+  return npubToHex(normalized) ?? normalized;
+};
+
+export const looksLikeProfileIdentifier = (value: string): boolean =>
+  /^npub1[02-9ac-hj-np-z]+$/i.test(value) || /^[0-9a-f]{64}$/i.test(value);
+
+export const looksLikeEventIdentifier = (value: string): boolean => /^[0-9a-f]{64}$/i.test(value);
+
+export function buildPubkeyCandidates(pubkey: string): string[] {
+  const normalized = pubkey.trim().replace(/^nostr:/i, "");
+  const isNpub = normalized.toLowerCase().startsWith("npub1");
+  const decodedHex = isNpub ? npubToHex(normalized) : null;
+  // Prefer hex first when an npub decodes, so the common path wins before a 404 retry.
+  const ordered = decodedHex ? [decodedHex, normalized] : [normalized];
+  return Array.from(
+    new Set(ordered.filter((candidate): candidate is string => typeof candidate === "string"))
+  );
+}
+
+/**
+ * Try pubkey candidates (hex-first). Retry the alternate form only on 404;
+ * never retry after timeouts or other failures.
+ */
+export async function withPubkeyCandidates<T>(
+  pubkey: string,
+  operation: (candidate: string) => Promise<T>,
+  fallbackMessage = "Profile lookup failed."
+): Promise<T> {
+  const candidates = buildPubkeyCandidates(pubkey);
+  let lastError: Error | null = null;
+
+  for (let index = 0; index < candidates.length; index += 1) {
+    const candidate = candidates[index]!;
+    try {
+      return await operation(candidate);
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(fallbackMessage);
+      const isTimeout = isApiTimeoutError(error);
+      const isNotFound = error instanceof ApiError && error.isNotFound;
+      const hasNext = index < candidates.length - 1;
+      if (!hasNext || isTimeout || !isNotFound) {
+        throw lastError;
+      }
+    }
+  }
+
+  throw lastError ?? new Error(fallbackMessage);
+}
+
+export function toSearchCursor(value: unknown): string | undefined {
+  if (typeof value === "string" && value.length > 0) return value;
+  if (typeof value === "object" && value !== null) {
+    const record = value as Record<string, unknown>;
+    for (const key of ["next_cursor", "cursor", "continuation", "next"]) {
+      const candidate = record[key];
+      if (typeof candidate === "string" && candidate.length > 0) return candidate;
+    }
+  }
+  return undefined;
+}
+
+export function searchFilterParams(
+  query: Pick<SearchQuery, "correction" | "lang" | "window" | "sort">
+): Record<string, string | undefined> {
+  return {
+    ...(query.correction === "0" ? { correction: "0" } : {}),
+    ...(query.lang ? { lang: query.lang } : {}),
+    ...(query.window ? { window: query.window } : {}),
+    ...(query.sort ? { sort: query.sort } : {}),
+  };
+}
+
+export function buildSearchQuery(
+  query: Pick<
+    SearchQuery,
+    "q" | "limit" | "offset" | "cursor" | "correction" | "lang" | "window" | "sort"
+  >
+): Record<string, string | number | undefined> {
+  // cursor and offset are mutually exclusive on the backend; the cursor
+  // already encodes the continuation position.
+  return {
+    q: query.q,
+    limit: query.limit,
+    offset: query.cursor ? undefined : query.offset,
+    cursor: query.cursor,
+    ...searchFilterParams(query),
+  };
+}
+
+export function normalizeDomainQuery(domain: string): string {
+  const normalized = domain.trim().toLowerCase();
+  if (normalized.length === 0) return "";
+  const candidate = normalized.includes("://") ? normalized : `https://${normalized}`;
+  try {
+    return new URL(candidate).hostname.toLowerCase().replace(/\.$/, "");
+  } catch {
+    const hostname = normalized
+      .replace(/^https?:\/\//, "")
+      .replace(/^www\./, "")
+      .split("/")[0];
+    return (hostname ?? "").replace(/\.$/, "");
+  }
+}
+
+export const normalizeRelayHints = (value: unknown): string[] =>
+  (Array.isArray(value) ? value : [])
+    .map((entry) => {
+      if (typeof entry === "string") return entry.trim();
+      if (typeof entry === "object" && entry !== null) {
+        const record = entry as Record<string, unknown>;
+        for (const key of ["relay_url", "url", "host", "relay", "name"]) {
+          const relay = record[key];
+          if (typeof relay === "string" && relay.trim().length > 0) {
+            return relay.trim();
+          }
+        }
+      }
+      return "";
+    })
+    .filter((relay) => relay.length > 0);
+
+export function buildSearchSectionTotals(
+  notesCount: number,
+  profilesCount: number,
+  profileSuggestionsCount: number,
+  hashtagsCount: number,
+  relaysCount: number
+): NonNullable<SearchResponse["section_totals"]> {
+  return {
+    notes: notesCount,
+    profiles: profilesCount,
+    profile_suggestions: profileSuggestionsCount,
+    hashtags: hashtagsCount,
+    relays: relaysCount,
+  };
+}
+
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Replies shown on a hot-conversation row follow the selected range. */
+export function applyConversationReplyWindow<T extends Record<string, unknown>>(
+  notes: T[],
+  window: string | undefined
+): T[] {
+  if (!isStatsWindow(window)) return notes;
+  const key = `replies_${window}`;
+  return notes.map((note) => {
+    const activity = note.activity;
+    if (!isRecord(activity)) return note;
+    const value = activity[key];
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return note;
+    return { ...note, reply_count: Math.round(value) };
+  });
+}
+
+export function normalizeHotConversationNotes(
+  value: unknown
+): ReturnType<typeof normalizeEventRecords> {
+  const normalizedDirect = normalizeEventRecords(value).filter((note) => note.id.length > 0);
+  if (normalizedDirect.length > 0) return normalizedDirect;
+  if (!Array.isArray(value)) return [];
+
+  const expanded = value
+    .map((entry) => {
+      if (!isRecord(entry)) return null;
+      const candidate =
+        entry.note ??
+        entry.event ??
+        entry.root ??
+        entry.root_note ??
+        entry.latest ??
+        entry.last_event ??
+        entry;
+      if (isRecord(candidate)) {
+        // Prefer nested note identity, but keep conversation-level engagement
+        // (reply_count from thread_summaries; repost/reaction/zap from
+        // note_discovery_stats) when the nested payload omits those fields.
+        return normalizeEventRecord({
+          ...candidate,
+          id: candidate.id ?? entry.root_event_id ?? entry.event_id ?? entry.id,
+          event_id: candidate.event_id ?? entry.root_event_id ?? entry.event_id,
+          pubkey: candidate.pubkey ?? entry.pubkey ?? entry.author_pubkey,
+          activity: isRecord(candidate.activity) ? candidate.activity : entry.activity,
+          reply_count: candidate.reply_count ?? entry.reply_count,
+          repost_count: candidate.repost_count ?? entry.repost_count,
+          reaction_count: candidate.reaction_count ?? entry.reaction_count,
+          zap_count: candidate.zap_count ?? entry.zap_count,
+          zap_msats: candidate.zap_msats ?? entry.zap_msats,
+        });
+      }
+      return normalizeEventRecord(candidate);
+    })
+    .filter((note): note is NonNullable<ReturnType<typeof normalizeEventRecord>> => note !== null)
+    .filter((note) => note.id.length > 0);
+
+  return Array.from(new Map(expanded.map((note) => [note.id, note])).values());
+}
+
+export function buildCursorQuery(
+  query?: CursorQuery
+): Record<string, string | number | undefined> | undefined {
+  if (!query) return undefined;
+  return {
+    cursor: query.cursor,
+    limit: query.limit,
+    offset: query.offset,
+    window: query.window,
+    kind: query.kind,
+    ...(query.lang ? { lang: query.lang } : {}),
+    ...viewerQueryParam(query.viewer),
+  };
+}

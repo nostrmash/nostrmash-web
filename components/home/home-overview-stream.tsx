@@ -1,0 +1,117 @@
+import { redirect } from "next/navigation";
+
+import { FreshnessBadge } from "@/components/discover/discover-shell";
+import { EditorialOverview } from "@/components/discover/overview/editorial-overview";
+import { EmptyState } from "@/components/explorer/empty-state";
+import { LanguageSelector } from "@/components/explorer/language-selector";
+import { ErrorPanel, SoftRefreshNote } from "@/components/ui/status-panels";
+import { getStaleDataNotice } from "@/lib/api/http";
+import type { HomePageData } from "@/lib/home/load-home-page-data";
+import type { HomeRails } from "@/lib/home/load-home-rails";
+import { LANGUAGE_EMPTY_MESSAGE } from "@/lib/search-params/language";
+import type { StatsWindow } from "@/lib/search-params/window";
+import { formatUpdatedRelative } from "@/lib/time/freshness";
+
+/**
+ * Streaming halves of the homepage. The shell (hero, window selector, tabs)
+ * renders immediately from `searchParams`; these two async components await
+ * the shared home-data promise inside Suspense boundaries so the fan-out never
+ * blocks first paint.
+ */
+
+function homeHasRails(rails: HomeRails): boolean {
+  return (
+    Boolean(rails.article) ||
+    rails.conversations.length > 0 ||
+    rails.zapped.length > 0 ||
+    rails.live.length > 0 ||
+    rails.movers.length > 0
+  );
+}
+
+function redirectRejectedDiscoveryWindow(href: string | null) {
+  if (href) redirect(href);
+}
+
+export async function HomeFreshness({ data }: { data: Promise<HomePageData> }) {
+  const home = await data;
+  redirectRejectedDiscoveryWindow(home.discoveryWindowRedirect);
+  const label = formatUpdatedRelative(home.computedAt);
+  return label ? <FreshnessBadge label={label} /> : null;
+}
+
+export async function HomeLanguageSelector({
+  data,
+  path,
+  query,
+  language,
+  window,
+}: {
+  data: Promise<HomePageData>;
+  path: string;
+  query: string;
+  language?: string;
+  window: StatsWindow;
+}) {
+  const home = await data;
+  redirectRejectedDiscoveryWindow(home.discoveryWindowRedirect);
+  return (
+    <LanguageSelector
+      path={path}
+      query={query}
+      activeLanguage={language ?? home.language}
+      options={home.topLanguages?.[window] ?? []}
+    />
+  );
+}
+
+export async function HomeOverviewBody({ data }: { data: Promise<HomePageData> }) {
+  const home = await data;
+  redirectRejectedDiscoveryWindow(home.discoveryWindowRedirect);
+  const hasContent =
+    home.homeNotes.length > 0 ||
+    Boolean(home.mediaLeaders.pictures || home.mediaLeaders.videos || home.mediaLeaders.shorts) ||
+    homeHasRails(home.rails) ||
+    home.hydratedHomeProfiles.length > 0 ||
+    home.hydratedHomeRisingProfiles.length > 0 ||
+    home.homeHashtags.length > 0 ||
+    home.homeDomains.length > 0;
+  // Read after the loader has run so last-known-good fallbacks are reflected.
+  const staleMessage = getStaleDataNotice();
+
+  return (
+    <>
+      {staleMessage ? <SoftRefreshNote message={staleMessage} /> : null}
+      {home.errorMessage ? (
+        hasContent ? (
+          <SoftRefreshNote message={home.errorMessage} />
+        ) : (
+          <ErrorPanel message={home.errorMessage} />
+        )
+      ) : null}
+      {hasContent ? (
+        <EditorialOverview
+          notes={home.homeNotes}
+          mediaLeaders={home.mediaLeaders}
+          rails={home.rails}
+          profiles={home.hydratedHomeProfiles}
+          risingProfiles={home.hydratedHomeRisingProfiles}
+          authorsByPubkey={home.noteAuthorsByPubkey}
+          pulseStats={home.pulseStats}
+          sectionFailures={home.sectionFailures}
+          window={home.window}
+          lang={home.language}
+          viewer={home.viewer}
+          personalization={home.personalization}
+          viewerCohortDegraded={home.viewerCohortDegraded}
+          rankedHashtags={home.homeHashtags}
+          rankedDomains={home.homeDomains}
+          archiveDay={home.archiveDay}
+          coverageNotes={home.coverageNotes}
+        />
+      ) : home.language && !home.errorMessage ? (
+        <EmptyState message={LANGUAGE_EMPTY_MESSAGE} />
+      ) : null}
+    </>
+  );
+}
