@@ -159,7 +159,7 @@ Create the token at `https://dash.cloudflare.com/profile/api-tokens` as an **acc
 
 Do not grant every account. Do not put the token in the repository. Zone, Workers Routes, Write is required only if a later deploy adds or changes a route. The checked-in `wrangler.jsonc` has no routes.
 
-The failed run `https://github.com/nostrmash/nostrmash-web/actions/runs/43747234339` does not contain this preflight. Re-running that run repeats the old OAuth attempt. Push the commit that contains this preflight to `main`, with the two secrets already saved, and let the new **CI** run finish. Evidence of success is a green `deploy` job and a green `prod-validate` job whose log shows the production SEO/security check against `https://nostrmash.com`. A green quality job alone does not mean production was deployed.
+Production is deployed by Cloudflare Workers Builds on every push to `main`. The GitHub check is `Workers Builds: nostrmash-web`. The Actions `deploy` job also deploys when `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are set on the `production` environment. Without those secrets it skips Wrangler and says so. `prod-validate` then checks `https://nostrmash.com`. A green quality job alone does not mean production was deployed.
 
 ## Contributing
 
