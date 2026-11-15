@@ -129,10 +129,37 @@ pnpm cf:deploy
 
 Before deploy, make sure you have:
 
-- configured Cloudflare auth for Wrangler
+- an account-owned Cloudflare API token in GitHub, not `wrangler login`
 - created the R2 bucket named in `wrangler.jsonc` (`nostrmash-web-opennext-cache`, binding `NEXT_INC_CACHE_R2_BUCKET`)
 - set `NOSTRMASH_API_BASE_URL` and `NEXT_PUBLIC_SITE_URL` (the checked-in `wrangler.jsonc` already sets the production values)
 - the `WORKER_SELF_REFERENCE` service binding (`nostrmash-web`), the Images binding, and the `SUGGEST_RATE_LIMITER` rate limit (`namespace_id` is account-specific)
+
+CI deploys only from a push to `main`, and only after quality, the OpenNext build, and Playwright pass. The deploy job uses the `production` environment. It runs `pnpm exec tsx scripts/cloudflare-deploy-preflight.ts --live` before Wrangler. That check refuses to start when `CLOUDFLARE_API_TOKEN` or `CLOUDFLARE_ACCOUNT_ID` is missing or malformed, and it never falls back to another account or to interactive OAuth. A failed OpenNext build is a separate earlier job. A failed preflight is an authentication or permission failure.
+
+The preflight calls `wrangler whoami` and `wrangler r2 bucket info`. It does not create the bucket and it does not deploy. Create `nostrmash-web-opennext-cache` in the same account before the first deploy. OpenNext still tries to populate that bucket during deploy.
+
+### GitHub secrets
+
+Repository secrets were not copied when this repository moved to the `nostrmash` organization. Add these on the **production** environment, because the deploy job sets `environment: production`.
+
+1. Open `https://github.com/nostrmash/nostrmash-web/settings/environments`.
+2. Open `production`.
+3. Add environment secrets, not repository variables:
+   - `CLOUDFLARE_API_TOKEN`
+   - `CLOUDFLARE_ACCOUNT_ID` (the 32-character account id from the Workers overview)
+4. Optional build secrets, if Sentry source maps should upload: `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT`, `NEXT_PUBLIC_SENTRY_DSN`.
+5. Optional production check: `PROD_VALIDATE_TOKEN`.
+
+Create the token at `https://dash.cloudflare.com/profile/api-tokens` as an **account-owned** custom token limited to this one account. `wrangler login` cannot express these scopes. Minimum permissions:
+
+- Account, Workers Scripts, Edit (Workers Editor). The Worker `nostrmash-web` must already exist, or the token also needs permission to create it.
+- Account, Workers R2 Storage, Edit. OpenNext provisions and writes the cache bucket. Workers Editor alone does not grant that R2 API call.
+- Account, Account Settings, Read, so the preflight can confirm the account id.
+- Account, Cloudflare Images, Edit, for the `IMAGES` binding if that binding is not already attached.
+
+Do not grant every account. Do not put the token in the repository. Zone, Workers Routes, Write is required only if a later deploy adds or changes a route. The checked-in `wrangler.jsonc` has no routes.
+
+The failed run `https://github.com/nostrmash/nostrmash-web/actions/runs/43747234339` does not contain this preflight. Re-running that run repeats the old OAuth attempt. Push the commit that contains this preflight to `main`, with the two secrets already saved, and let the new **CI** run finish. Evidence of success is a green `deploy` job and a green `prod-validate` job whose log shows the production SEO/security check against `https://nostrmash.com`. A green quality job alone does not mean production was deployed.
 
 ## Contributing
 
