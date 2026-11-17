@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   ENTITY_EDGE_CACHE_CONTROL,
   PUBLIC_EDGE_CACHE_CONTROL,
+  applyPublicEdgeCache,
   publicEdgeCacheHeaders,
 } from "./public-edge-cache";
 
@@ -124,5 +125,32 @@ describe("publicEdgeCacheHeaders", () => {
         response(200, { "Set-Cookie": "nm_lang=de" })
       )
     ).toBeNull();
+  });
+});
+
+describe("applyPublicEdgeCache", () => {
+  it("does not store a hashtag page whose section failed to load", async () => {
+    const cached = await applyPublicEdgeCache(
+      new URL("https://nostrmash.com/hashtags/bitcoin/notes"),
+      new Response("<main>Couldn’t load this section</main>", { status: 200 })
+    );
+    expect(cached.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(await cached.text()).toContain("Couldn’t load this section");
+  });
+
+  it("still caches a hashtag page that rendered", async () => {
+    const cached = await applyPublicEdgeCache(
+      new URL("https://nostrmash.com/hashtags/bitcoin/notes"),
+      new Response("<main>#bitcoin notes</main>", { status: 200 })
+    );
+    expect(cached.headers.get("Cache-Control")).toBe(ENTITY_EDGE_CACHE_CONTROL);
+  });
+
+  it("streams a ranking without reading the body for the error mark", async () => {
+    const cached = await applyPublicEdgeCache(
+      new URL("https://nostrmash.com/"),
+      new Response("Couldn’t load this section", { status: 200 })
+    );
+    expect(cached.headers.get("Cache-Control")).toBe(PUBLIC_EDGE_CACHE_CONTROL);
   });
 });

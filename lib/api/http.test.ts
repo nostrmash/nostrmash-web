@@ -141,6 +141,8 @@ describe("fetchApiJson timeouts", () => {
     const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
     expect(headers.get("cf-connecting-ip")).toBe("203.0.113.44");
     expect(headers.get("x-forwarded-for")).toBe("203.0.113.44");
+    expect(headers.get("x-real-ip")).toBe("203.0.113.44");
+    expect(headers.get("x-nostrmash-visitor-ip")).toBe("203.0.113.44");
   });
 
   it("keeps an explicit client address instead of replacing it", async () => {

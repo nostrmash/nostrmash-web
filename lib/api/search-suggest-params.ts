@@ -26,9 +26,12 @@ export function clientIpFromRequest(headers: Headers): string {
   return "unknown";
 }
 
+/** Header the API trusts only from our own Worker subrequests. */
+export const VISITOR_IP_HEADER = "X-NostrMash-Visitor-IP";
+
 /**
- * Address safe to send as `CF-Connecting-IP`. Cloudflare rejects missing,
- * loopback, and other non-public values with error 1000, which fails suggest.
+ * Address safe to send as the visitor. Cloudflare rejects missing, loopback,
+ * and other non-public values with error 1000, which fails the subrequest.
  */
 export function forwardableClientIp(ip: string): string | undefined {
   const trimmed = ip.trim();
@@ -58,4 +61,21 @@ export function forwardableClientIp(ip: string): string | undefined {
   }
   if (lower.startsWith("::ffff:")) return forwardableClientIp(trimmed.slice("::ffff:".length));
   return trimmed;
+}
+
+/**
+ * Headers that keep a server render on the visitor's rate-limit bucket.
+ *
+ * Same-zone Worker subrequests copy `X-Real-IP` into `CF-Connecting-IP` at
+ * the origin. Cross-zone subrequests replace `CF-Connecting-IP` with one
+ * shared Worker address, so the API reads `X-NostrMash-Visitor-IP` (and the
+ * existing `X-Forwarded-For`) only for that address when `CF-Worker` is our zone.
+ */
+export function visitorForwardHeaders(ip: string): Record<string, string> {
+  return {
+    "X-Forwarded-For": ip,
+    "CF-Connecting-IP": ip,
+    "X-Real-IP": ip,
+    [VISITOR_IP_HEADER]: ip,
+  };
 }

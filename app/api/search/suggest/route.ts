@@ -10,6 +10,7 @@ import {
   clampSuggestQuery,
   clientIpFromRequest,
   forwardableClientIp,
+  visitorForwardHeaders,
 } from "@/lib/api/search-suggest-params";
 import {
   searchSuggestResponseSchema,
@@ -69,10 +70,7 @@ export async function GET(request: NextRequest) {
         schema: searchSuggestResponseSchema,
         init: forwardedIp
           ? {
-              headers: {
-                "X-Forwarded-For": forwardedIp,
-                "CF-Connecting-IP": forwardedIp,
-              },
+              headers: visitorForwardHeaders(forwardedIp),
             }
           : undefined,
       }
