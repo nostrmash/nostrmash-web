@@ -9,6 +9,11 @@
       "id": "GHSA-g3hv-75wg-m249",
       "package": "minimatch",
       "reason": "Moderate glob-pattern DoS in minimatch 9 and 10, same OpenNext build path as the glob advisory. The patched line is minimatch 11. Build globs are fixed strings in our toolchain, not attacker-controlled note content. pnpm audit --prod does not report it."
+    },
+    {
+      "id": "GHSA-fc5q-39xc-vjpf",
+      "package": "picomatch",
+      "reason": "High ReDoS in picomatch through 4.0.7, with no patched release. It is only on the ESLint path (typescript-eslint and eslint-config-next), not in the Worker bundle. Patterns there are fixed lint globs, not request input. pnpm audit --prod does not report it."
     }
   ]
 }
