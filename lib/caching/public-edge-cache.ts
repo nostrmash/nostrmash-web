@@ -28,6 +28,13 @@ export const PUBLIC_EDGE_CACHE_CONTROL =
 export const ENTITY_EDGE_CACHE_CONTROL =
   "public, s-maxage=600, max-age=0, stale-while-revalidate=600";
 
+/** Copy from ErrorPanel. A 200 that contains it is a failed section, not a page to pin. */
+export const SECTION_LOAD_ERROR_MARK = "Couldn’t load this section";
+
+export function entityBodyHasLoadError(body: string): boolean {
+  return body.includes(SECTION_LOAD_ERROR_MARK);
+}
+
 /**
  * Next document and RSC requests share a URL. Without these, a cached HTML
  * document would be served to a client navigation.
@@ -80,4 +87,34 @@ export function publicEdgeCacheHeaders(url: URL, response: Response): Headers | 
   if (variesOnCookie(url)) vary.add("Cookie");
   headers.set("Vary", [...vary].join(", "));
   return headers;
+}
+
+/**
+ * Apply the shared edge cache to a document response.
+ *
+ * Entity pages stay cached for minutes. A render that failed a section (the
+ * hashtag page when the API rate-limits the worker) must not be that cached
+ * document, or every visitor sees the failure until the TTL expires.
+ */
+export async function applyPublicEdgeCache(url: URL, response: Response): Promise<Response> {
+  const headers = publicEdgeCacheHeaders(url, response);
+  if (!headers) return response;
+
+  if (headers.get("Cache-Control") !== ENTITY_EDGE_CACHE_CONTROL) {
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
+  }
+
+  const body = await response.text();
+  if (entityBodyHasLoadError(body)) {
+    headers.set("Cache-Control", "private, no-store");
+  }
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }

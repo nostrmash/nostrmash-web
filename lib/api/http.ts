@@ -1,7 +1,7 @@
 import type { z } from "zod";
 
 import { ApiError } from "@/lib/api/errors";
-import { forwardableClientIp } from "@/lib/api/search-suggest-params";
+import { forwardableClientIp, visitorForwardHeaders } from "@/lib/api/search-suggest-params";
 import {
   buildLkgKey,
   isLkgCacheClass,
@@ -52,10 +52,7 @@ async function visitorRateLimitHeaders(
       incoming.get("cf-connecting-ip") ?? incoming.get("x-forwarded-for")?.split(",")[0] ?? ""
     );
     if (!ip) return {};
-    return {
-      "X-Forwarded-For": ip,
-      "CF-Connecting-IP": ip,
-    };
+    return visitorForwardHeaders(ip);
   } catch (error) {
     // Static pages have no visitor. Swallowing the dynamic-usage bailout
     // keeps this fetch from forcing every page to render dynamically.

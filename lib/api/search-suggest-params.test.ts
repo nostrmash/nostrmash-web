@@ -5,6 +5,7 @@ import {
   clampSuggestQuery,
   clientIpFromRequest,
   forwardableClientIp,
+  visitorForwardHeaders,
 } from "@/lib/api/search-suggest-params";
 
 describe("search suggest params", () => {
@@ -39,5 +40,14 @@ describe("search suggest params", () => {
     expect(forwardableClientIp("::1")).toBeUndefined();
     expect(forwardableClientIp("192.168.1.177")).toBeUndefined();
     expect(forwardableClientIp("::ffff:127.0.0.1")).toBeUndefined();
+  });
+
+  it("forwards the visitor on every header the API can see", () => {
+    expect(visitorForwardHeaders("203.0.113.10")).toEqual({
+      "X-Forwarded-For": "203.0.113.10",
+      "CF-Connecting-IP": "203.0.113.10",
+      "X-Real-IP": "203.0.113.10",
+      "X-NostrMash-Visitor-IP": "203.0.113.10",
+    });
   });
 });

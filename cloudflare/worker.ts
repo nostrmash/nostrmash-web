@@ -5,7 +5,7 @@ import nextWorker, {
   DOShardedTagCache,
 } from "../.open-next/worker.js";
 
-import { publicEdgeCacheHeaders } from "../lib/caching/public-edge-cache";
+import { applyPublicEdgeCache } from "../lib/caching/public-edge-cache";
 import { videoFrameCacheResponse } from "../lib/caching/video-frame-cache";
 
 export { BucketCachePurge, DOQueueHandler, DOShardedTagCache };
@@ -16,14 +16,7 @@ const worker = {
     if (request.method !== "GET") return response;
     if (new URL(request.url).pathname === "/video-frame") return videoFrameCacheResponse(response);
 
-    const headers = publicEdgeCacheHeaders(new URL(request.url), response);
-    if (!headers) return response;
-
-    return new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers,
-    });
+    return applyPublicEdgeCache(new URL(request.url), response);
   },
 };
 
