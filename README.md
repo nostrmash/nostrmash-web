@@ -3,7 +3,9 @@
 [![CI](https://github.com/nostrmash/nostrmash-web/actions/workflows/ci.yml/badge.svg)](https://github.com/nostrmash/nostrmash-web/actions/workflows/ci.yml)
 [![License: Unlicense](https://img.shields.io/badge/license-Unlicense-blue)](LICENSE)
 
-Public explorer for [NostrMash](https://nostrmash.com) ([repository](https://github.com/nostrmash/nostrmash)). Search notes and profiles, and browse trends, relays, and network stats. The site reads the NostrMash API and does not talk to relays itself. SmartFlowSocial's [cache worker](https://github.com/smartflowsocial/smartflowsocial-cache-worker) calls that same API.
+Public explorer for [NostrMash](https://nostrmash.com) ([repository](https://github.com/nostrmash/nostrmash)). Search notes and profiles, and browse trends, relays, and network stats. The site reads the NostrMash API and does not talk to relays itself.
+
+NostrMash maintains several standalone Nostr developer utilities. They can be used independently of NostrMash Core. One of them is the [Nostr Read Gateway](https://github.com/nostrmash/nostr-read-gateway).
 
 ## Stack
 
