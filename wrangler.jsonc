@@ -13,6 +13,13 @@
   },
   "compatibility_date": "2026-04-09",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  // Workers Logs in the dashboard. invocation_logs adds the request/response event Cloudflare generates per invocation.
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true,
+    },
+  },
   "vars": {
     "NEXT_PUBLIC_SITE_URL": "https://nostrmash.com",
     "NOSTRMASH_API_BASE_URL": "https://api.nostrmash.com",
@@ -48,4 +55,43 @@
       },
     },
   ],
+  // Branch previews do not inherit vars or bindings. The cache bucket and rate
+  // limiter stay off the production resources. Preview URLs are public.
+  "previews": {
+    "observability": {
+      "logs": {
+        "enabled": true,
+        "invocation_logs": true,
+      },
+    },
+    "vars": {
+      "NEXT_PUBLIC_SITE_URL": "https://nostrmash.com",
+      "NOSTRMASH_API_BASE_URL": "https://api.nostrmash.com",
+    },
+    "services": [
+      {
+        "binding": "WORKER_SELF_REFERENCE",
+        "service": "nostrmash-web",
+      },
+    ],
+    "r2_buckets": [
+      {
+        "binding": "NEXT_INC_CACHE_R2_BUCKET",
+        "bucket_name": "nostrmash-web-opennext-cache-preview",
+      },
+    ],
+    "ratelimits": [
+      {
+        "name": "SUGGEST_RATE_LIMITER",
+        "namespace_id": "1002",
+        "simple": {
+          "limit": 60,
+          "period": 60,
+        },
+      },
+    ],
+    "images": {
+      "binding": "IMAGES",
+    },
+  },
 }
