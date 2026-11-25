@@ -1,8 +1,30 @@
+import { notePublicSectionError } from "@/lib/caching/note-section-error";
 import { summarizeLoadErrors } from "@/lib/errors/user-message";
+
+const SECTION_LOAD_ERROR_TITLE = "Couldn’t load this section";
+
+function isSectionLoadErrorTitle(title: string): boolean {
+  return title.replace(/’/g, "'") === "Couldn't load this section";
+}
+
+/**
+ * Records the failure during the server render, before the document stream
+ * closes. The browser renderer, including component tests, skips it: only a
+ * Server Component can be async, and the browser has no cache flag to set.
+ */
+function SectionErrorSignal() {
+  if (typeof window !== "undefined") return null;
+  return <SectionErrorSignalOnServer />;
+}
+
+async function SectionErrorSignalOnServer() {
+  await notePublicSectionError();
+  return null;
+}
 
 export function ErrorPanel({
   message,
-  title = "Couldn’t load this section",
+  title = SECTION_LOAD_ERROR_TITLE,
   detail,
   retryHref,
 }: {
@@ -21,6 +43,7 @@ export function ErrorPanel({
       role="alert"
       className="border-danger/55 bg-surface text-ink rounded-xl border-l-2 px-4 py-4 text-sm break-words"
     >
+      {isSectionLoadErrorTitle(title) ? <SectionErrorSignal /> : null}
       <p className="text-ink font-medium">{title}</p>
       <p className="text-ink-muted mt-1.5 leading-6">{message}</p>
       {retryHref ? (

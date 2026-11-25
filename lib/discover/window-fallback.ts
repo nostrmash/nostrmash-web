@@ -6,6 +6,7 @@ import {
   DISCOVERY_30D_HIDDEN_COOKIE,
   DISCOVERY_LAST_WINDOW_COOKIE,
   DISCOVERY_WINDOW_PREFERENCE_COOKIE,
+  discoveryWindowPreferenceHref,
   parseDiscoveryWindowPreference,
   unsupportedDiscoveryWindowHref,
 } from "@/lib/discover/discovery-window-session";
@@ -28,6 +29,7 @@ export {
   DISCOVERY_30D_HIDDEN_COOKIE,
   DISCOVERY_LAST_WINDOW_COOKIE,
   DISCOVERY_WINDOW_PREFERENCE_COOKIE,
+  discoveryWindowPreferenceHref,
   safeInternalPath,
   serializeDiscoveryWindowPreferenceCookie,
   serializeLastDiscoveryWindowCookie,
@@ -58,30 +60,6 @@ export async function lastDiscoveryWindow(): Promise<RelayStatsWindow> {
     }
   }
   return "24h";
-}
-
-/**
- * Where to send a Discover URL that omitted `window`, so a saved 7d or 30d
- * comes back the way a saved language does. An explicit `window` wins.
- * Pagination stays; choosing a range in the selector is what clears it.
- * A saved 30d is skipped once this session knows the index rejected it.
- */
-export function discoveryWindowPreferenceHref(
-  path: string,
-  params: RouteSearchParams,
-  preference: string | undefined,
-  monthHidden: boolean,
-  previous: RelayStatsWindow
-): string | null {
-  if (isStatsWindow(readSearchParam(params, "window"))) return null;
-  const saved = parseDiscoveryWindowPreference(preference);
-  if (!saved) return null;
-  const window = saved === "30d" && monthHidden ? previous : saved;
-  if (window === "24h") return null;
-  const next = toUrlSearchParams(params);
-  next.set("window", window);
-  const query = next.toString();
-  return query.length > 0 ? `${path}?${query}` : path;
 }
 
 /**

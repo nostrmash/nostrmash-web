@@ -1,4 +1,9 @@
-import type { RelayStatsWindow, StatsWindow } from "@/lib/search-params/window";
+import {
+  readSearchParam,
+  toUrlSearchParams,
+  type RouteSearchParams,
+} from "@/lib/search-params/pagination";
+import { isStatsWindow, type RelayStatsWindow, type StatsWindow } from "@/lib/search-params/window";
 
 /** Session cookie. Set after `window=30d` is rejected so the option stays hidden. */
 export const DISCOVERY_30D_HIDDEN_COOKIE = "nm_no_30d";
@@ -34,6 +39,29 @@ export function serializeDiscoveryWindowPreferenceCookie(window: StatsWindow): s
 
 export function unsupportedDiscoveryWindowHref(nextPath: string): string {
   return `/api/discovery-window/unsupported?next=${encodeURIComponent(nextPath)}`;
+}
+
+/**
+ * Where to send a Discover URL that omitted `window`, so a saved 7d or 30d
+ * comes back the way a saved language does. An explicit `window` wins.
+ * A saved 30d is skipped once this session knows the index rejected it.
+ */
+export function discoveryWindowPreferenceHref(
+  path: string,
+  params: RouteSearchParams,
+  preference: string | undefined,
+  monthHidden: boolean,
+  previous: RelayStatsWindow
+): string | null {
+  if (isStatsWindow(readSearchParam(params, "window"))) return null;
+  const saved = parseDiscoveryWindowPreference(preference);
+  if (!saved) return null;
+  const window = saved === "30d" && monthHidden ? previous : saved;
+  if (window === "24h") return null;
+  const next = toUrlSearchParams(params);
+  next.set("window", window);
+  const query = next.toString();
+  return query.length > 0 ? `${path}?${query}` : path;
 }
 
 /** Only same-origin relative paths. Anything else falls back to the homepage. */

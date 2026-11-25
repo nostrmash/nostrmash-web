@@ -1,9 +1,8 @@
 /**
- * Workers Caching removes `Range` before this Worker runs, stores the full
- * 200, and slices that stored body into the 206 Safari requires. It can only
- * slice a body whose length it knows. Next's edge sandbox drops Content-Length,
- * and its document `Vary` has nothing to do with a video preview, so a range
- * probe otherwise comes back as the whole file with status 200.
+ * A full 200 preview needs a known length. The route answers `Range` itself
+ * (206). Next still drops Content-Length on the way out and attaches the
+ * document `Vary`, which does not belong on a video, so a non-range 200 is
+ * normalized here.
  */
 export async function videoFrameCacheResponse(response: Response): Promise<Response> {
   if (response.status !== 200 || !response.body) return response;
