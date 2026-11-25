@@ -6,10 +6,11 @@
   },
   "main": "cloudflare/worker.ts",
   "name": "nostrmash-web",
-  // Cache hits for the paths in lib/caching/public-edge-cache.ts are served
-  // before this Worker runs. Other responses stay private and are not stored.
+  // Public HTML is cached in the Worker (caches.default). Workers Caching stays
+  // off: it bills every request, including static assets and cache hits, and
+  // a path cannot be excluded. Assets are free only while this is disabled.
   "cache": {
-    "enabled": true,
+    "enabled": false,
   },
   "compatibility_date": "2026-04-09",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],

@@ -5,13 +5,28 @@ import nextWorker, {
   DOShardedTagCache,
 } from "../.open-next/worker.js";
 
-import { applyPublicEdgeCache } from "../lib/caching/public-edge-cache";
+import { applyPublicEdgeCache, respondWithPublicEdgeCache } from "../lib/caching/public-edge-cache";
 import { videoFrameCacheResponse } from "../lib/caching/video-frame-cache";
 
 export { BucketCachePurge, DOQueueHandler, DOShardedTagCache };
 
+function documentCache(): Cache | null {
+  const store = globalThis.caches as CacheStorage & { default?: Cache };
+  return store?.default ?? null;
+}
+
 const worker = {
   async fetch(request: Request, env: unknown, ctx: Parameters<typeof nextWorker.fetch>[2]) {
+    const cached = await respondWithPublicEdgeCache({
+      request,
+      cache: documentCache(),
+      origin: (originRequest) => nextWorker.fetch(originRequest, env, ctx),
+      waitUntil: (promise) => {
+        ctx.waitUntil(promise);
+      },
+    });
+    if (cached) return cached;
+
     const response = await nextWorker.fetch(request, env, ctx);
     if (request.method !== "GET") return response;
     if (new URL(request.url).pathname === "/video-frame") return videoFrameCacheResponse(response);
