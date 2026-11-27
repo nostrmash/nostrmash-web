@@ -10,6 +10,7 @@ import { EntityContextNav } from "@/components/discover/entity-context-nav";
 import { EmptyState } from "@/components/explorer/empty-state";
 import { IdBadge } from "@/components/explorer/id-badge";
 import { AboutThisData } from "@/components/explorer/about-this-data";
+import { relayManagerHref } from "@/lib/relays/manager/identity";
 import { ProfileAvatar } from "@/components/explorer/profile-avatar";
 import { RichInlineText } from "@/components/explorer/note-content";
 import { NotFoundState } from "@/components/layout/not-found-state";
@@ -629,6 +630,12 @@ export default async function ProfilePage({
           </div>
         </div>
         {evidenceLine ? <p className="text-ink-muted mt-3 text-sm">{evidenceLine}</p> : null}
+        <Link
+          href={relayManagerHref(canonicalNpub)}
+          className="nm-action-link mt-3 inline-flex text-sm"
+        >
+          Inspect relay configuration
+        </Link>
 
         <Disclosure
           title="Identity and protocol details"

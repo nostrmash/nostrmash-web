@@ -1,3 +1,5 @@
+import { relayManagerHref } from "@/lib/relays/manager/identity";
+import Link from "@/components/app-link";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
@@ -188,6 +190,12 @@ export default async function RelayPage({
         }
       />
       <NetworkNav />
+      <Link
+        href={relayManagerHref(undefined, snapshot.relayUrl ?? `wss://${normalizedRelayHost}`)}
+        className="nm-action-link inline-flex text-sm"
+      >
+        Compare this relay by role
+      </Link>
 
       <LoadErrors errors={errors} />
 

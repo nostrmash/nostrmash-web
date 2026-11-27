@@ -245,6 +245,7 @@ export async function fetchApiJson<T>(
     timeoutMs?: number;
     init?: RequestInit;
     schema?: z.ZodTypeAny;
+    sensitive?: boolean;
   }
 ): Promise<T> {
   const query = new URLSearchParams();
@@ -265,7 +266,7 @@ export async function fetchApiJson<T>(
   // Enforcing this here (rather than at ~50 call sites) means new endpoints
   // are safe by default.
   const cacheClass: CacheClass =
-    requestedCacheClass !== "requestTime" && !isBoundedCachePath(path)
+    options?.sensitive || (requestedCacheClass !== "requestTime" && !isBoundedCachePath(path))
       ? "requestTime"
       : requestedCacheClass;
   const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS[cacheClass];
@@ -296,20 +297,21 @@ export async function fetchApiJson<T>(
 
   const performFetch = async () => {
     const forwarded = await visitorRateLimitHeaders(options?.init?.headers);
-    return traceApiCall(`api:${path}`, async () =>
+    const request = () =>
       fetch(buildApiUrl(path, query), {
         method: "GET",
         ...toNextFetchConfig(cacheClass),
         ...options?.init,
         signal,
+        ...(options?.sensitive ? { cache: "no-store", redirect: "error" } : {}),
         headers: {
           Accept: "application/json",
           "X-Request-Id": outboundRequestId,
           ...forwarded,
           ...(options?.init?.headers ?? {}),
         },
-      })
-    );
+      });
+    return options?.sensitive ? request() : traceApiCall(`api:${path}`, request);
   };
 
   let response: Response;
@@ -321,7 +323,7 @@ export async function fetchApiJson<T>(
     // (like hashtag notes) have no LKG entry, so without the retry a single
     // challenge fails the whole section render.
     for (const delayMs of CHALLENGE_RETRY_DELAYS_MS) {
-      if (!isEdgeChallengeResponse(response)) break;
+      if (options?.sensitive || !isEdgeChallengeResponse(response)) break;
       try {
         await response.body?.cancel();
       } catch {
@@ -333,10 +335,10 @@ export async function fetchApiJson<T>(
   } catch (error) {
     if (isAbortError(error)) {
       const timeoutError = new Error(`API request timed out after ${timeoutMs}ms: ${path}`);
-      reportUpstreamFailure(timeoutError, path, outboundRequestId);
+      if (!options?.sensitive) reportUpstreamFailure(timeoutError, path, outboundRequestId);
       return tryServeLastKnownGood(timeoutError);
     }
-    reportUpstreamFailure(error, path, outboundRequestId);
+    if (!options?.sensitive) reportUpstreamFailure(error, path, outboundRequestId);
     return tryServeLastKnownGood(error);
   }
 
@@ -362,9 +364,11 @@ export async function fetchApiJson<T>(
       path,
       errorBody,
       response.headers.get("x-request-id") ?? outboundRequestId,
-      `${message}${details}`
+      `${message}${details}`,
+      response.headers.get("retry-after") ?? undefined
     );
-    reportUpstreamFailure(apiError, path, apiError.requestId ?? outboundRequestId);
+    if (!options?.sensitive)
+      reportUpstreamFailure(apiError, path, apiError.requestId ?? outboundRequestId);
 
     // Serve LKG for transient upstream failures (including challenges that
     // survived the retry loop above); keep throwing for client/auth errors.

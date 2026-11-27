@@ -81,6 +81,7 @@ export type DocumentCache = {
 };
 
 function cacheControlFor(pathname: string): string | null {
+  if (pathname === "/relays/manager") return null;
   if (SHARED_EXACT_PATHS.has(pathname) || pathname.startsWith("/stats/")) {
     return PUBLIC_EDGE_CACHE_CONTROL;
   }

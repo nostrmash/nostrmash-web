@@ -31,6 +31,7 @@ export class ApiError extends Error {
   readonly status: number;
   readonly code?: string;
   readonly requestId?: string;
+  readonly retryAfter?: string;
   readonly path: string;
   readonly body?: ApiErrorBody;
 
@@ -40,6 +41,7 @@ export class ApiError extends Error {
     path: string;
     code?: string;
     requestId?: string;
+    retryAfter?: string;
     body?: ApiErrorBody;
   }) {
     super(options.message);
@@ -47,6 +49,7 @@ export class ApiError extends Error {
     this.status = options.status;
     this.code = options.code;
     this.requestId = options.requestId;
+    this.retryAfter = options.retryAfter;
     this.path = options.path;
     this.body = options.body;
   }
@@ -65,7 +68,8 @@ export class ApiError extends Error {
     path: string,
     body: ApiErrorBody | undefined,
     requestIdHeader: string | null,
-    message: string
+    message: string,
+    retryAfter?: string
   ): ApiError {
     return new ApiError({
       status,
@@ -74,6 +78,7 @@ export class ApiError extends Error {
       code: extractCode(body),
       requestId: extractRequestId(body, requestIdHeader),
       body,
+      retryAfter,
     });
   }
 }

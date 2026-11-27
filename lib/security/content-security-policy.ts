@@ -13,6 +13,9 @@ export function buildContentSecurityPolicy(options: {
   const connectSrc = [
     "'self'",
     "https:",
+    // Relay Manager opens client-controlled Nostr sockets. CSP belongs to the
+    // document and must also work when arriving through App Router navigation.
+    "wss:",
     ...(isDev ? ["http://localhost:*", "http://127.0.0.1:*"] : []),
   ];
 

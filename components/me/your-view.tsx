@@ -1,5 +1,7 @@
 "use client";
 
+import { browserSigner } from "@/lib/nostr/browser-signer";
+
 import Link from "@/components/app-link";
 import { useEffect, useState, useSyncExternalStore } from "react";
 
@@ -59,7 +61,7 @@ export function YourView() {
   }
 
   async function signIn() {
-    const nostr = (window as Window & { nostr?: { getPublicKey?: () => Promise<string> } }).nostr;
+    const nostr = browserSigner();
     if (!nostr?.getPublicKey) {
       setError("This browser has no Nostr signer. Paste a public key instead.");
       return;
