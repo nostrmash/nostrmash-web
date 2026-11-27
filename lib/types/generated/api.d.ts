@@ -1376,6 +1376,715 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/relays/roles": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Relay roles this server understands */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Static catalog. algorithm is relay-intel-v1. tie_break is lower_event_id, matching NIP-01 and replaceable-event retention. A locally stored event is not necessarily the latest on the network. Each role names its event kinds, default list size, and whether it is a positive adoption signal. private_storage is client-side. blocked is not a usage signal. The server does not sign or publish events. */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+        /** @description Relay intelligence is disabled. The body uses the standard error envelope with code feature_disabled. */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/relays/rankings": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Global role-specific relay rankings */
+    get: {
+      parameters: {
+        query: {
+          role:
+            | "public_inbox"
+            | "public_outbox"
+            | "dm_inbox"
+            | "search"
+            | "favorite"
+            | "keypackage"
+            | "blossom"
+            | "wiki"
+            | "blocked";
+          limit?: number;
+        };
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Precomputed public-safe adoption for one role. distinct_users counts a pubkey once for that role. Blocked-relay references are not adoption. A relay absent from NostrMash's ingest set can still rank. score is omitted when evidence is thin. fallbacks includes stats_not_ready until the worker's first aggregate refresh. An empty relays array is success. Admission state does not exclude a relay. */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            /**
+             * @example {
+             *       "algorithm": "relay-intel-v1",
+             *       "score_version": "relay-score-v1",
+             *       "optimizer_version": "relay-opt-v3",
+             *       "tie_break": "lower_event_id",
+             *       "role": "public_outbox",
+             *       "positive_adoption": true,
+             *       "fallbacks": [],
+             *       "relays": [
+             *         {
+             *           "url": "wss://relay.example.com",
+             *           "role": "public_outbox",
+             *           "distinct_users": 1200,
+             *           "trust_weighted": 340.5,
+             *           "active_users": 180,
+             *           "modern_users": 1100,
+             *           "legacy_users": 100,
+             *           "score": 0.72,
+             *           "confidence": 0.61,
+             *           "confidence_label": "medium",
+             *           "eligible": true
+             *         }
+             *       ]
+             *     }
+             */
+            "application/json": unknown;
+          };
+        };
+        400: components["responses"]["Error"];
+        /** @description Relay intelligence is disabled. */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+        /** @description Migration 000133 has not been applied. */
+        503: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/relays/capabilities": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Stored capability evidence for one relay */
+    get: {
+      parameters: {
+        query: {
+          /** @description Websocket or Blossom URL. It is not dialed by this request. */
+          relay_url: string;
+        };
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Advertised, observed, verified, unsupported, unknown, stale, and restricted capabilities. A successful kind-0 EOSE is read_subscription only. NIP-11 support for NIP-17, NIP-42, or NIP-50 is advertised, not verified. giftwrap_private is comprehensive only at evidence version 2, after the recipient exact-id and recipient-tag subscriptions retrieve the event while authenticated and the observer and anonymous paths do not. A nil privacy boolean is unknown, not false. A timeout, rate limit, payment restriction, or incomplete authentication leaves the affected exposure field null. Verified false requires every applicable path to finish without a retrieval. Confidence, freshness, and evidence version come from the capability that decides the assessment. giftwrap_accept, giftwrap_private, and giftwrap_public are separate. A kind 1 write does not verify keypackage. This request performs no network I/O. */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            /**
+             * @example {
+             *       "relay_url": "wss://relay.example.com",
+             *       "capabilities": {
+             *         "read_subscription": {
+             *           "status": "observed",
+             *           "confidence": 0.68,
+             *           "source": "read_probe"
+             *         },
+             *         "search": {
+             *           "status": "advertised",
+             *           "confidence": 0.4,
+             *           "source": "nip11",
+             *           "detail": "NIP-50 is advertised and has not been verified"
+             *         },
+             *         "giftwrap": {
+             *           "status": "unknown",
+             *           "confidence": 0.15,
+             *           "source": "none"
+             *         }
+             *       },
+             *       "privacy": {
+             *         "assessment": "publicly_accessible",
+             *         "recipient_retrieval_verified": true,
+             *         "gift_wrap_accepted": true,
+             *         "exposure_confirmed": true,
+             *         "exposure_unresolved": true,
+             *         "recipient_auth_verified": true,
+             *         "publication_auth_verified": null,
+             *         "stale": false,
+             *         "confidence": 0.8,
+             *         "freshness": "fresh",
+             *         "recipient_exact_verified": true,
+             *         "recipient_tag_verified": true,
+             *         "unauthenticated_exposure": true,
+             *         "authenticated_observer_exposure": false,
+             *         "comprehensive": false,
+             *         "access_paths": [
+             *           {
+             *             "name": "recipient_exact",
+             *             "status": "verified",
+             *             "retrieved": true,
+             *             "unauthenticated": true,
+             *             "authenticated": true,
+             *             "confidence": 0.7,
+             *             "freshness": "fresh"
+             *           }
+             *         ]
+             *       }
+             *     }
+             */
+            "application/json": unknown;
+          };
+        };
+        400: components["responses"]["Error"];
+        /** @description Relay intelligence is disabled. */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+        /** @description Migration 000133 has not been applied. */
+        503: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/relays/optimize": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Propose a complementary relay configuration
+     * @description Returns an unsigned preview. The server never signs or publishes it. Request bodies are not cached and private URLs in the body are not logged. An unknown preset is 400. Conflicting constraints return 200 with constraints_satisfied false and unsatisfied_constraints filled in.
+     */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          /**
+           * @example {
+           *       "pubkey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+           *       "preset": "balanced",
+           *       "constraints": {
+           *         "max": {
+           *           "public_inbox": 3,
+           *           "public_outbox": 3,
+           *           "dm_inbox": 2
+           *         },
+           *         "pinned": [
+           *           "wss://self.example.com"
+           *         ],
+           *         "free_only": true,
+           *         "retain_existing": true
+           *       }
+           *     }
+           */
+          "application/json": {
+            /** @description 64 hex characters or an npub */
+            pubkey: string;
+            /** @enum {string} */
+            preset?: "balanced" | "creator" | "privacy" | "minimal" | "decentralization" | "custom";
+            roles?: string[];
+            constraints?: {
+              max?: {
+                [key: string]: number;
+              };
+              min?: {
+                [key: string]: number;
+              };
+              pinned?: string[];
+              excluded?: string[];
+              preferred?: string[];
+              custom?: string[];
+              paid_access?: string[];
+              free_only?: boolean;
+              /** @enum {string} */
+              auth_read?: "allow" | "prefer_without" | "require" | "reject";
+              /** @enum {string} */
+              auth_write?: "allow" | "prefer_without" | "require" | "reject";
+              min_reliability?: number;
+              min_capability_confidence?: number;
+              /** @description Soft operator-diversity preference. It does not block signing. */
+              diversity?: number;
+              /** @description Mandatory operator diversity. The selected configuration must use more than one known operator. It stays unsatisfied when the list is a single operator, operator ownership is unknown, or no eligible alternative exists. It is not waived because no diverse relay is available. Omit it, or leave it false, for the soft diversity preference. */
+              require_operator_diversity?: boolean;
+              /** @description When set on dm_inbox, every selected DM relay must have a comprehensive recipient-only gift-wrap result. Acceptance, advertisements, unknown evidence, and an unresolved exposure do not satisfy it. */
+              require_verified_privacy?: boolean;
+              retain_existing?: boolean;
+              weights?: {
+                [key: string]: number;
+              };
+              global?: {
+                [key: string]: unknown;
+              };
+              /** @description Per-role overrides of the same constraint fields. A role may set require_verified_privacy, min_capability_confidence, or require_operator_diversity. */
+              by_role?: {
+                [key: string]: unknown;
+              };
+            };
+            supplied_relays?: {
+              role?: string;
+              url?: string;
+            }[];
+            /** @description Signed events supplied by the client for this request. They are not stored. */
+            source_events?: {
+              [key: string]: unknown;
+            }[];
+            /** @description Allow an unsigned list when this index has no source event. */
+            allow_create?: boolean;
+            /** @description Allow an unsigned list when the indexed source was deleted. */
+            allow_recreate?: boolean;
+          };
+        };
+      };
+      responses: {
+        /** @description algorithm, score_version, and optimizer_version identify the model. coverage is the share of cohort members with a stored declaration whose matching role includes the relay. Accounts with no stored declaration are unknown_weight, not unreachable. public_relays is one unsigned kind 10002 covering inbox and outbox. based_on_event_id is the source the client should compare before signing. Kind 3 is never proposed. */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            /**
+             * @example {
+             *       "algorithm": "relay-intel-v1",
+             *       "score_version": "relay-score-v1",
+             *       "optimizer_version": "relay-opt-v3",
+             *       "tie_break": "lower_event_id",
+             *       "preset": "balanced",
+             *       "constraints_satisfied": true,
+             *       "cohort": {
+             *         "size": 40,
+             *         "truncated": false,
+             *         "trust_data": true,
+             *         "used": "personalized"
+             *       },
+             *       "roles": [
+             *         {
+             *           "role": "public_inbox",
+             *           "availability": "present",
+             *           "selection": {
+             *             "selected": [
+             *               {
+             *                 "url": "wss://in.example.com"
+             *               }
+             *             ],
+             *             "constraints_satisfied": true,
+             *             "independently_satisfied": true
+             *           }
+             *         }
+             *       ],
+             *       "proposal": {
+             *         "note": "Unsigned preview. The client must sign and publish.",
+             *         "proposal_safe": true,
+             *         "source_complete": true,
+             *         "ready_to_sign": false,
+             *         "public_relays": {
+             *           "kind": 10002,
+             *           "content": "",
+             *           "based_on_event_id": "abcdef",
+             *           "based_on_created_at": 1700000000,
+             *           "tags": [
+             *             [
+             *               "r",
+             *               "wss://in.example.com",
+             *               "read"
+             *             ],
+             *             [
+             *               "r",
+             *               "wss://out.example.com",
+             *               "write"
+             *             ]
+             *           ]
+             *         }
+             *       }
+             *     }
+             */
+            "application/json": components["schemas"]["RelayOptimizeResponse"];
+          };
+        };
+        400: components["responses"]["Error"];
+        /** @description Relay intelligence is disabled. */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+        /** @description Migration 000133 has not been applied, or this process is already running RELAY_INTEL_OPTIMIZE_CONCURRENCY optimizations. The overload body uses error code overloaded and sets Retry-After. That refusal is not a completed optimization and it is not the per-client 429 rate_limited response. */
+        503: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/relays/verify": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Read a published event back from named relays
+     * @description Read-only. The server does not publish the event. sample_verified means the checked relays returned the event and agreed on the latest replaceable version. It is not network-wide propagation. global_success is the deprecated alias of that sample result. exact_retrieved_count is how many relays returned the submitted event. latest_agreement_count is how many of those also agreed it is the latest version.
+     */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          /**
+           * @example {
+           *       "event": {
+           *         "id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+           *         "pubkey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+           *         "created_at": 1700000000,
+           *         "kind": 10002,
+           *         "tags": [
+           *           [
+           *             "r",
+           *             "wss://relay.example.com"
+           *           ]
+           *         ],
+           *         "content": "",
+           *         "sig": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+           *       },
+           *       "relays": [
+           *         "wss://relay.example.com",
+           *         "wss://other.example.com"
+           *       ]
+           *     }
+           */
+          "application/json": {
+            /** @description A signed Nostr event */
+            event: Record<string, never>;
+            relays: string[];
+          };
+        };
+      };
+      responses: {
+        /** @description signature_valid false returns 200 and does not dial. Outcomes are retrieved, not_found, conflict, timeout, unavailable, rejected, and not_queried. reason is ok, insufficient_relay_sample, conflict, timeout, partial_propagation, or signature_invalid. */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            /**
+             * @example {
+             *       "signature_valid": true,
+             *       "retrieved_count": 2,
+             *       "exact_retrieved_count": 2,
+             *       "latest_agreement_count": 2,
+             *       "agreement": true,
+             *       "partial": false,
+             *       "sample_verified": true,
+             *       "global_success": true,
+             *       "reason": "ok",
+             *       "relays": [
+             *         {
+             *           "relay_url": "wss://relay.example.com",
+             *           "outcome": "retrieved"
+             *         },
+             *         {
+             *           "relay_url": "wss://other.example.com",
+             *           "outcome": "retrieved"
+             *         }
+             *       ]
+             *     }
+             */
+            "application/json": unknown;
+          };
+        };
+        400: components["responses"]["Error"];
+        /** @description Relay intelligence is disabled. */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/profiles/{pubkey}/relay-config": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Effective public relay configuration for one account */
+    get: {
+      parameters: {
+        query?: {
+          /** @description Ignored. The pubkey is the path value, hex or npub. */
+          pubkey?: string;
+        };
+        header?: never;
+        path: {
+          pubkey: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Unknown pubkeys return 200 with availability missing, not 404. An explicit empty kind 10002 stays empty and does not fall back to kind 3. A missing kind 10002 uses kind 3. kind 10013 is reported as client_side with no URLs. Public URLs the account published are returned even when public_safe is false; they stay out of rankings. */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            /**
+             * @example {
+             *       "algorithm": "relay-intel-v1",
+             *       "tie_break": "lower_event_id",
+             *       "account": {
+             *         "pubkey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+             *         "modern_public": "present",
+             *         "legacy_public": "missing",
+             *         "keypackage_discovery": "nip65_outbox",
+             *         "roles": [
+             *           {
+             *             "role": "public_inbox",
+             *             "availability": "present",
+             *             "relays": [
+             *               {
+             *                 "url": "wss://in.example.com",
+             *                 "marker": "read",
+             *                 "public_safe": true,
+             *                 "source_kind": 10002
+             *               }
+             *             ]
+             *           }
+             *         ]
+             *       },
+             *       "note": "Kind 10013 contents are not decrypted. Private URLs in public events are returned here and excluded from rankings."
+             *     }
+             */
+            "application/json": unknown;
+          };
+        };
+        400: components["responses"]["Error"];
+        /** @description Relay intelligence is disabled. */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+        /** @description Migration 000133 has not been applied. */
+        503: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/profiles/{pubkey}/relay-diagnostics": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Account relay configuration findings */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          pubkey: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Findings use severity critical, warning, suggestion, or info. One failed probe is info. Repeated failures are a warning, not a removal. Codes include missing_modern_config, explicit_empty_config, obsolete_legacy_config, unreachable, repeated_connection_failures, blocked_relay_in_active_config, dm_privacy_unverified, and private_config_client_side. */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+        400: components["responses"]["Error"];
+        /** @description Relay intelligence is disabled. */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+        /** @description Migration 000133 has not been applied. */
+        503: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/profiles/{pubkey}/relay-recommendations": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Personalized or global relay recommendations */
+    get: {
+      parameters: {
+        query?: {
+          role?: string;
+          preset?: "balanced" | "creator" | "privacy" | "minimal" | "decentralization" | "custom";
+        };
+        header?: never;
+        path: {
+          pubkey: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Uses the account's public follows, followers, interactions, and trust scores when they exist. fallbacks names global_fallback, cohort_only, stats_not_ready, sparse_declarations, or insufficient_evidence. No authentication and no private key. Actions are add, remove, replace, retain, and investigate. */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+        400: components["responses"]["Error"];
+        /** @description Relay intelligence is disabled. */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+        /** @description Migration 000133 has not been applied. */
+        503: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/relays/catalog": {
     parameters: {
       query?: never;
@@ -1796,6 +2505,8 @@ export interface paths {
           window?: "24h" | "7d" | "30d";
           /** @description Restrict rankings to one language. Lowercase 2-8 letter code, "und", or "und-uncertain". Omit to rank every language. Responses echo `language` and include global `top_languages` for 24h, 7d, and 30d. Each window lists the 15 highest real language codes (`^[a-z]{2,3}$`) when that many are indexed, plus `und` and `und-uncertain` when those buckets have notes. The unmarked buckets do not count toward the 15. No parameter changes how many languages are returned. */
           lang?: components["parameters"]["DiscoveryLanguage"];
+          /** @description Personalize this ranking for one account. Hex pubkey or npub. No authentication: follow lists are public. The list blends engagement from that account's follows with the global ranking (default cohort weight 0.85). Zero follows returns the global ranking with personalization.source global_fallback. A follow list above the cap keeps the most trusted follows and sets follows_truncated. Offset is capped at 500 when viewer is set. The response is Cache-Control private. An invalid value is 400. When personalized discovery is disabled, a valid viewer is ignored. */
+          viewer?: components["parameters"]["Viewer"];
           limit?: number;
           offset?: number;
         };
@@ -1839,6 +2550,8 @@ export interface paths {
           window?: "24h" | "7d" | "30d";
           /** @description Restrict rankings to one language. Lowercase 2-8 letter code, "und", or "und-uncertain". Omit to rank every language. Responses echo `language` and include global `top_languages` for 24h, 7d, and 30d. Each window lists the 15 highest real language codes (`^[a-z]{2,3}$`) when that many are indexed, plus `und` and `und-uncertain` when those buckets have notes. The unmarked buckets do not count toward the 15. No parameter changes how many languages are returned. */
           lang?: components["parameters"]["DiscoveryLanguage"];
+          /** @description Personalize this ranking for one account. Hex pubkey or npub. No authentication: follow lists are public. The list blends engagement from that account's follows with the global ranking (default cohort weight 0.85). Zero follows returns the global ranking with personalization.source global_fallback. A follow list above the cap keeps the most trusted follows and sets follows_truncated. Offset is capped at 500 when viewer is set. The response is Cache-Control private. An invalid value is 400. When personalized discovery is disabled, a valid viewer is ignored. */
+          viewer?: components["parameters"]["Viewer"];
           limit?: number;
           offset?: number;
         };
@@ -1887,6 +2600,8 @@ export interface paths {
           window?: "24h" | "7d" | "30d";
           /** @description Restrict rankings to one language. Lowercase 2-8 letter code, "und", or "und-uncertain". Omit to rank every language. Responses echo `language` and include global `top_languages` for 24h, 7d, and 30d. Each window lists the 15 highest real language codes (`^[a-z]{2,3}$`) when that many are indexed, plus `und` and `und-uncertain` when those buckets have notes. The unmarked buckets do not count toward the 15. No parameter changes how many languages are returned. */
           lang?: components["parameters"]["DiscoveryLanguage"];
+          /** @description Personalize this ranking for one account. Hex pubkey or npub. No authentication: follow lists are public. The list blends engagement from that account's follows with the global ranking (default cohort weight 0.85). Zero follows returns the global ranking with personalization.source global_fallback. A follow list above the cap keeps the most trusted follows and sets follows_truncated. Offset is capped at 500 when viewer is set. The response is Cache-Control private. An invalid value is 400. When personalized discovery is disabled, a valid viewer is ignored. */
+          viewer?: components["parameters"]["Viewer"];
           limit?: number;
           offset?: number;
         };
@@ -1931,6 +2646,8 @@ export interface paths {
           window?: "24h" | "7d" | "30d";
           /** @description Restrict rankings to one language. Lowercase 2-8 letter code, "und", or "und-uncertain". Omit to rank every language. Responses echo `language` and include global `top_languages` for 24h, 7d, and 30d. Each window lists the 15 highest real language codes (`^[a-z]{2,3}$`) when that many are indexed, plus `und` and `und-uncertain` when those buckets have notes. The unmarked buckets do not count toward the 15. No parameter changes how many languages are returned. */
           lang?: components["parameters"]["DiscoveryLanguage"];
+          /** @description Personalize this ranking for one account. Hex pubkey or npub. No authentication: follow lists are public. The list blends engagement from that account's follows with the global ranking (default cohort weight 0.85). Zero follows returns the global ranking with personalization.source global_fallback. A follow list above the cap keeps the most trusted follows and sets follows_truncated. Offset is capped at 500 when viewer is set. The response is Cache-Control private. An invalid value is 400. When personalized discovery is disabled, a valid viewer is ignored. */
+          viewer?: components["parameters"]["Viewer"];
           limit?: number;
           offset?: number;
         };
@@ -1976,6 +2693,8 @@ export interface paths {
         query?: {
           /** @description Restrict rankings to one language. Lowercase 2-8 letter code, "und", or "und-uncertain". Omit to rank every language. Responses echo `language` and include global `top_languages` for 24h, 7d, and 30d. Each window lists the 15 highest real language codes (`^[a-z]{2,3}$`) when that many are indexed, plus `und` and `und-uncertain` when those buckets have notes. The unmarked buckets do not count toward the 15. No parameter changes how many languages are returned. */
           lang?: components["parameters"]["DiscoveryLanguage"];
+          /** @description Personalize this ranking for one account. Hex pubkey or npub. No authentication: follow lists are public. The list blends engagement from that account's follows with the global ranking (default cohort weight 0.85). Zero follows returns the global ranking with personalization.source global_fallback. A follow list above the cap keeps the most trusted follows and sets follows_truncated. Offset is capped at 500 when viewer is set. The response is Cache-Control private. An invalid value is 400. When personalized discovery is disabled, a valid viewer is ignored. */
+          viewer?: components["parameters"]["Viewer"];
           limit?: number;
           offset?: number;
         };
@@ -2022,6 +2741,8 @@ export interface paths {
           window?: "24h" | "7d" | "30d";
           /** @description Restrict rankings to one language. Lowercase 2-8 letter code, "und", or "und-uncertain". Omit to rank every language. Responses echo `language` and include global `top_languages` for 24h, 7d, and 30d. Each window lists the 15 highest real language codes (`^[a-z]{2,3}$`) when that many are indexed, plus `und` and `und-uncertain` when those buckets have notes. The unmarked buckets do not count toward the 15. No parameter changes how many languages are returned. */
           lang?: components["parameters"]["DiscoveryLanguage"];
+          /** @description Personalize this ranking for one account. Hex pubkey or npub. No authentication: follow lists are public. The list blends engagement from that account's follows with the global ranking (default cohort weight 0.85). Zero follows returns the global ranking with personalization.source global_fallback. A follow list above the cap keeps the most trusted follows and sets follows_truncated. Offset is capped at 500 when viewer is set. The response is Cache-Control private. An invalid value is 400. When personalized discovery is disabled, a valid viewer is ignored. */
+          viewer?: components["parameters"]["Viewer"];
           limit?: number;
           offset?: number;
         };
@@ -2065,6 +2786,8 @@ export interface paths {
           window?: "24h" | "7d" | "30d";
           /** @description Restrict rankings to one language. Lowercase 2-8 letter code, "und", or "und-uncertain". Omit to rank every language. Responses echo `language` and include global `top_languages` for 24h, 7d, and 30d. Each window lists the 15 highest real language codes (`^[a-z]{2,3}$`) when that many are indexed, plus `und` and `und-uncertain` when those buckets have notes. The unmarked buckets do not count toward the 15. No parameter changes how many languages are returned. */
           lang?: components["parameters"]["DiscoveryLanguage"];
+          /** @description Personalize this ranking for one account. Hex pubkey or npub. No authentication: follow lists are public. The list blends engagement from that account's follows with the global ranking (default cohort weight 0.85). Zero follows returns the global ranking with personalization.source global_fallback. A follow list above the cap keeps the most trusted follows and sets follows_truncated. Offset is capped at 500 when viewer is set. The response is Cache-Control private. An invalid value is 400. When personalized discovery is disabled, a valid viewer is ignored. */
+          viewer?: components["parameters"]["Viewer"];
           notes_limit?: number;
           hashtags_limit?: number;
           profiles_limit?: number;
@@ -2115,6 +2838,8 @@ export interface paths {
           window?: "24h" | "7d" | "30d";
           /** @description Restrict rankings to one language. Lowercase 2-8 letter code, "und", or "und-uncertain". Omit to rank every language. Responses echo `language` and include global `top_languages` for 24h, 7d, and 30d. Each window lists the 15 highest real language codes (`^[a-z]{2,3}$`) when that many are indexed, plus `und` and `und-uncertain` when those buckets have notes. The unmarked buckets do not count toward the 15. No parameter changes how many languages are returned. */
           lang?: components["parameters"]["DiscoveryLanguage"];
+          /** @description Personalize this ranking for one account. Hex pubkey or npub. No authentication: follow lists are public. The list blends engagement from that account's follows with the global ranking (default cohort weight 0.85). Zero follows returns the global ranking with personalization.source global_fallback. A follow list above the cap keeps the most trusted follows and sets follows_truncated. Offset is capped at 500 when viewer is set. The response is Cache-Control private. An invalid value is 400. When personalized discovery is disabled, a valid viewer is ignored. */
+          viewer?: components["parameters"]["Viewer"];
           limit?: number;
           offset?: number;
         };
@@ -2161,6 +2886,8 @@ export interface paths {
           window?: "24h" | "7d" | "30d";
           /** @description Restrict rankings to one language. Lowercase 2-8 letter code, "und", or "und-uncertain". Omit to rank every language. Responses echo `language` and include global `top_languages` for 24h, 7d, and 30d. Each window lists the 15 highest real language codes (`^[a-z]{2,3}$`) when that many are indexed, plus `und` and `und-uncertain` when those buckets have notes. The unmarked buckets do not count toward the 15. No parameter changes how many languages are returned. */
           lang?: components["parameters"]["DiscoveryLanguage"];
+          /** @description Personalize this ranking for one account. Hex pubkey or npub. No authentication: follow lists are public. The list blends engagement from that account's follows with the global ranking (default cohort weight 0.85). Zero follows returns the global ranking with personalization.source global_fallback. A follow list above the cap keeps the most trusted follows and sets follows_truncated. Offset is capped at 500 when viewer is set. The response is Cache-Control private. An invalid value is 400. When personalized discovery is disabled, a valid viewer is ignored. */
+          viewer?: components["parameters"]["Viewer"];
           limit?: number;
           offset?: number;
         };
@@ -2199,11 +2926,13 @@ export interface paths {
     };
     /**
      * Accounts ranked by trusted follower count
-     * @description Directory of accounts that have a profile, ordered by how many followers are in the published trust graph (`trusted_follower_count`), then pubkey. Dormant accounts and accounts under 1000 raw followers stay in the list when that count is positive. A trusted count of zero does not rank. `window` is `all`. `lang` is accepted and ignored. `follower_count` is everyone on a latest contact list. `score`, `trusted_follower_count`, and the `reasons[0]` evidence value are the trust-graph count. `reasons[0].code` is `audience_size` and the unit is `followers`.
+     * @description Directory of accounts that have a profile, ordered by how many followers are in the published trust graph (`trusted_follower_count`), then pubkey. Dormant accounts and accounts under 1000 raw followers stay in the list when that count is positive. A trusted count of zero does not rank. `window` is `all`. `lang` is accepted and ignored. `follower_count` is everyone on a latest contact list. `trusted_follower_count` and the `reasons[0]` evidence value are the trust-graph count. `score` matches that count on the global list. With `viewer` set, `score` is the blended rank and a profile the viewer already follows has `viewer_follows: true`. `reasons[0].code` is `audience_size` and the unit is `followers`.
      */
     get: {
       parameters: {
         query?: {
+          /** @description Personalize this ranking for one account. Hex pubkey or npub. No authentication: follow lists are public. The list blends engagement from that account's follows with the global ranking (default cohort weight 0.85). Zero follows returns the global ranking with personalization.source global_fallback. A follow list above the cap keeps the most trusted follows and sets follows_truncated. Offset is capped at 500 when viewer is set. The response is Cache-Control private. An invalid value is 400. When personalized discovery is disabled, a valid viewer is ignored. */
+          viewer?: components["parameters"]["Viewer"];
           limit?: number;
           offset?: number;
         };
@@ -2247,6 +2976,8 @@ export interface paths {
     get: {
       parameters: {
         query?: {
+          /** @description Personalize this ranking for one account. Hex pubkey or npub. No authentication: follow lists are public. The list blends engagement from that account's follows with the global ranking (default cohort weight 0.85). Zero follows returns the global ranking with personalization.source global_fallback. A follow list above the cap keeps the most trusted follows and sets follows_truncated. Offset is capped at 500 when viewer is set. The response is Cache-Control private. An invalid value is 400. When personalized discovery is disabled, a valid viewer is ignored. */
+          viewer?: components["parameters"]["Viewer"];
           window?: "24h" | "7d" | "30d";
           limit?: number;
           offset?: number;
@@ -2331,6 +3062,8 @@ export interface paths {
           window?: "24h" | "7d" | "30d";
           /** @description Restrict rankings to one language. Lowercase 2-8 letter code, "und", or "und-uncertain". Omit to rank every language. Responses echo `language` and include global `top_languages` for 24h, 7d, and 30d. Each window lists the 15 highest real language codes (`^[a-z]{2,3}$`) when that many are indexed, plus `und` and `und-uncertain` when those buckets have notes. The unmarked buckets do not count toward the 15. No parameter changes how many languages are returned. */
           lang?: components["parameters"]["DiscoveryLanguage"];
+          /** @description Personalize this ranking for one account. Hex pubkey or npub. No authentication: follow lists are public. The list blends engagement from that account's follows with the global ranking (default cohort weight 0.85). Zero follows returns the global ranking with personalization.source global_fallback. A follow list above the cap keeps the most trusted follows and sets follows_truncated. Offset is capped at 500 when viewer is set. The response is Cache-Control private. An invalid value is 400. When personalized discovery is disabled, a valid viewer is ignored. */
+          viewer?: components["parameters"]["Viewer"];
           limit?: number;
           offset?: number;
         };
@@ -2496,6 +3229,8 @@ export interface paths {
           window?: "24h" | "7d" | "30d";
           /** @description Restrict rankings to one language. Lowercase 2-8 letter code, "und", or "und-uncertain". Omit to rank every language. Responses echo `language` and include global `top_languages` for 24h, 7d, and 30d. Each window lists the 15 highest real language codes (`^[a-z]{2,3}$`) when that many are indexed, plus `und` and `und-uncertain` when those buckets have notes. The unmarked buckets do not count toward the 15. No parameter changes how many languages are returned. */
           lang?: components["parameters"]["DiscoveryLanguage"];
+          /** @description Personalize this ranking for one account. Hex pubkey or npub. No authentication: follow lists are public. The list blends engagement from that account's follows with the global ranking (default cohort weight 0.85). Zero follows returns the global ranking with personalization.source global_fallback. A follow list above the cap keeps the most trusted follows and sets follows_truncated. Offset is capped at 500 when viewer is set. The response is Cache-Control private. An invalid value is 400. When personalized discovery is disabled, a valid viewer is ignored. */
+          viewer?: components["parameters"]["Viewer"];
           limit?: number;
           offset?: number;
         };
@@ -2766,7 +3501,7 @@ export interface paths {
       };
       requestBody?: never;
       responses: {
-        /** @description Decomposed kind-0 field prevalence and provider domains */
+        /** @description Kind-0 field prevalence and provider domains. profiles counts profile_fields rows, the same population as /discovery/stats/accounts profiles. */
         200: {
           headers: {
             [name: string]: unknown;
@@ -2827,7 +3562,7 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    /** New and active author counts */
+    /** New authors, posting activity, and profile age */
     get: {
       parameters: {
         query?: never;
@@ -2837,7 +3572,7 @@ export interface paths {
       };
       requestBody?: never;
       responses: {
-        /** @description First-seen authors by day and recent active authors */
+        /** @description new_authors is pubkeys first seen by the index, by day. active_authors_1d, active_authors_7d, and active_authors_30d count pubkeys with a post in that window, including pubkeys that never published a kind-0 profile. profiles is the kind-0 population (same count as /discovery/stats/identity profiles). profiles_posted_30d is how many of those profiles posted in 30 days, and dormant_30d is the rest. account_age buckets those profiles by the oldest stored event created_at into indices 0 through 5 (under 1 day, 1–7, 7–30, 30–90, 90–365, 1 year or more). account_age_unknown counts profiles whose oldest event is missing, in the future, or before 2020-01-01. */
         200: {
           headers: {
             [name: string]: unknown;
@@ -3004,6 +3739,1501 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/profiles/{pubkey}/external-identities": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** NIP-39 external identity claims from the latest kind-0 event */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          pubkey: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Platform, identity, and proof for each claim */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/events/{id}/labels": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** NIP-32 labels on one event */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          id: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Self labels and labels that target this event */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/discovery/stats/labels": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Label distribution and language-label agreement */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Top namespace/label pairs and ISO-639-1 agreement totals */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/discovery/stats/emoji": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Custom emoji shortcode counts */
+    get: {
+      parameters: {
+        query?: {
+          window?: "24h" | "7d" | "30d";
+        };
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Shortcode counts for the window */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+        400: components["responses"]["Error"];
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/groups": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Relay groups ordered by activity, members, or recency */
+    get: {
+      parameters: {
+        query?: {
+          sort?: "active" | "members" | "recent";
+        };
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Group list */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/groups/{relayHost}/{groupId}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** One relay group */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          relayHost: string;
+          groupId: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Group metadata */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+        404: components["responses"]["Error"];
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/groups/{relayHost}/{groupId}/messages": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Recent messages in one relay group */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          relayHost: string;
+          groupId: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Group messages */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/relays/{relayHost}/groups": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Groups hosted by one relay */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          relayHost: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Groups on the relay */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/discovery/stats/groups": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Group census */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Group counts and recent message volume */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/live/{address}/chat": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Live-activity chat counters */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          address: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Chat count and unique chatters */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/events/{id}/poll": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Poll question and option counts */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          id: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Poll */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+        404: components["responses"]["Error"];
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/discovery/polls": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Recent or most-voted polls */
+    get: {
+      parameters: {
+        query?: {
+          sort?: "recent" | "votes";
+        };
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Poll list */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/discovery/stats/polls": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Poll census */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Poll and vote counts */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/profiles/{pubkey}/badges": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Badges awarded to and accepted by a profile */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          pubkey: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Badge awards and accepted badges */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/badges/{address}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** One badge definition */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          address: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Badge definition */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+        404: components["responses"]["Error"];
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/discovery/stats/badges": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Badge census */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Definition and award counts */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/events/{id}/goal": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Zap goal progress */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          id: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Goal amount and raised sats */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+        404: components["responses"]["Error"];
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/discovery/goals": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Zap goals ordered by sats raised */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Goal list */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/profiles/{pubkey}/status": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Latest user status */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          pubkey: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Status records */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/discovery/curation-sets": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Article and bookmark curation sets */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Curation sets */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/curation-sets/{address}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** One curation set and its items */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          address: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Curation set */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+        404: components["responses"]["Error"];
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/profiles/{pubkey}/interests": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Hashtags a profile lists as interests */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          pubkey: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Interest lists */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/profiles/{pubkey}/lists": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Relay preference lists for a profile */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          pubkey: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description List summaries */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/discovery/stats/kinds": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Event volume grouped by kind family */
+    get: {
+      parameters: {
+        query?: {
+          window?: "24h" | "7d" | "30d";
+        };
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Family totals and per-kind counts */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+        400: components["responses"]["Error"];
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/discovery/stats/conversations": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Daily thread shape */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Thread shape series */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/discovery/zaps/leaderboard": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Top zap senders or receivers */
+    get: {
+      parameters: {
+        query?: {
+          role?: "sender" | "receiver";
+          window?: "24h" | "7d" | "30d";
+        };
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Zap leaderboard */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/discovery/stats/zaps/heatmap": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Zap volume by weekday and hour */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Zap heatmap */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/hashtags/emerging": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Hashtags gaining volume */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Emerging hashtags */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/discovery/domains/emerging": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Domains shared by more people than their recent pace */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Emerging domains */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/discovery/archive": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** UTC days that have an overview snapshot */
+    get: {
+      parameters: {
+        query?: {
+          limit?: number;
+        };
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Archived days, newest first */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/discovery/archive/{date}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Overview snapshot for one UTC day */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          date: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Archived overview */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+        /** @description That day has not been archived */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/relays/coverage-changes": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Relays added to or dropped from the index */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Coverage change log */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/hashtags/{tag}/history": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Daily history for one hashtag */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          tag: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Hashtag history */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/discovery/stats/deletions": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Deletion volume and time to delete */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Deletion stats */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/discovery/stats/moderation": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Report volume and most-reported targets */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Moderation stats */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/profiles/{pubkey}/moderation": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Mute and report counts for a profile */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          pubkey: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Profile moderation stats */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/discovery/stats/spam": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Duplicate content clusters and burst authors */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Spam stats */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/discovery/stats/relay-lists": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Declared relay list size */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Relay list stats */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/relays/{relayHost}/health/history": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Daily relay probe history */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          relayHost: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Relay health history */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/discovery/stats/relay-software": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Relay software and NIP-11 limitation share */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Relay software matrix */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/discovery/stats/media-hosts": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Observed media hosts and declared Blossom servers */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Media host share */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/profiles/{pubkey}/labels": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Labels applied to or by a profile */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          pubkey: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Profile labels */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content?: never;
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/discovery/stats/series": {
     parameters: {
       query?: never;
@@ -3023,7 +5253,14 @@ export interface paths {
             | "sats_24h"
             | "new_authors_24h"
             | "nip17_dm_count_24h"
-            | "bridged_share_bps";
+            | "bridged_share_bps"
+            | "group_messages_24h"
+            | "poll_votes_24h"
+            | "live_chat_24h"
+            | "reports_24h"
+            | "deletions_24h"
+            | "labels_24h"
+            | "census_events_24h";
           /** @description How much hourly history to return. Each point is a rolling 24-hour total sampled once per UTC hour, not an hourly increment. */
           window?: "24h" | "7d" | "30d";
         };
@@ -5278,6 +7515,163 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
   schemas: {
+    RelayOptimizeResponse: {
+      /** @enum {string} */
+      algorithm: "relay-intel-v1";
+      /** @enum {string} */
+      score_version: "relay-score-v1";
+      /** @enum {string} */
+      optimizer_version: "relay-opt-v3";
+      /** @enum {string} */
+      tie_break: "lower_event_id";
+      tie_break_note: string;
+      /** Format: date-time */
+      generated_at: string;
+      /** Format: date-time */
+      stats_computed_at?: string | null;
+      fallbacks?: string[] | null;
+      pubkey: string;
+      /** @enum {string} */
+      preset: "balanced" | "creator" | "privacy" | "minimal" | "decentralization" | "custom";
+      preset_version: string;
+      cohort: components["schemas"]["RelayOptimizeCohort"];
+      sources?: components["schemas"]["RelayOptimizeSource"][] | null;
+      roles: components["schemas"]["RelayOptimizeRole"][];
+      proposal: components["schemas"]["RelayOptimizeProposal"];
+      constraints_satisfied: boolean;
+      unsatisfied_constraints?: components["schemas"]["RelayOptimizeReason"][] | null;
+      shared_configuration?: components["schemas"]["RelayOptimizeSharedRole"][] | null;
+    };
+    RelayOptimizeCohort: {
+      size: number;
+      truncated: boolean;
+      trust_data: boolean;
+      /** @enum {string} */
+      used: "personalized" | "global_fallback";
+    };
+    RelayOptimizeSource: {
+      kind: number;
+      d_tag?: string;
+      projection_event_id?: string;
+      canonical_event_id?: string;
+      /** @enum {string} */
+      status:
+        | "current"
+        | "stale"
+        | "missing"
+        | "deleted"
+        | "too_large"
+        | "unreadable"
+        | "stale_client"
+        | "inconsistent";
+      requires_refresh: boolean;
+      note?: string;
+    };
+    RelayOptimizeRole: {
+      /** @enum {string} */
+      role:
+        | "public_inbox"
+        | "public_outbox"
+        | "dm_inbox"
+        | "search"
+        | "blocked"
+        | "favorite"
+        | "relay_set"
+        | "keypackage"
+        | "blossom"
+        | "wiki"
+        | "private_storage";
+      /** @enum {string} */
+      availability: "missing" | "empty" | "present" | "client_side";
+      fallback?: string;
+      selection: components["schemas"]["RelayOptimizeSelection"];
+      recommendations: components["schemas"]["RelayOptimizeRecommendation"][] | null;
+      ranking?:
+        | {
+            [key: string]: unknown;
+          }[]
+        | null;
+      candidate_limit?: number;
+      candidates_truncated?: boolean;
+    };
+    RelayOptimizeSelection: {
+      selected: components["schemas"]["RelayOptimizeSelectedRelay"][] | null;
+      current_coverage: number;
+      proposed_coverage: number;
+      improvement: number;
+      unknown_weight: number;
+      known_weight: number;
+      distinct_endpoints: number;
+      operator_count: number;
+      max_operator_share: number;
+      concentration_basis: string;
+      redundancy: number;
+      constraints_satisfied: boolean;
+      independently_satisfied: boolean;
+      qualifications?: components["schemas"]["RelayOptimizeReason"][] | null;
+      unsatisfied_constraints?: components["schemas"]["RelayOptimizeReason"][] | null;
+      coverage_definition: string;
+    };
+    RelayOptimizeSelectedRelay: {
+      url: string;
+      marginal_coverage: number;
+      unique_coverage: number;
+      operator_key?: string;
+      pinned?: boolean;
+      current?: boolean;
+    };
+    RelayOptimizeReason: {
+      code: string;
+      text: string;
+    };
+    RelayOptimizeRecommendation: {
+      /** @enum {string} */
+      action: "add" | "remove" | "replace" | "retain" | "investigate";
+      role: string;
+      current?: string;
+      suggested?: string;
+      reason_codes: string[] | null;
+      text: string;
+      estimated_benefit?: number;
+      confidence: number;
+      /** @enum {string} */
+      confidence_label: "high" | "medium" | "low" | "insufficient";
+      attention_required: boolean;
+      limitations?: string[] | null;
+    };
+    RelayOptimizeProposal: {
+      public_relays?: components["schemas"]["RelayOptimizeEvent"];
+      lists?: components["schemas"]["RelayOptimizeEvent"][] | null;
+      note: string;
+      proposal_safe: boolean;
+      source_complete: boolean;
+      source_origin?: string;
+      source_event_id?: string;
+      source_created_at?: number;
+      requires_refresh: boolean;
+      requires_review: boolean;
+      ready_to_sign: boolean;
+      warnings?: components["schemas"]["RelayOptimizeReason"][] | null;
+      blocking_reasons?: components["schemas"]["RelayOptimizeReason"][] | null;
+    };
+    RelayOptimizeEvent: {
+      kind: number;
+      pubkey: string;
+      content: string;
+      tags: string[][] | null;
+      based_on_event_id?: string;
+      based_on_created_at?: number;
+      proposal_safe: boolean;
+      source_origin?: string;
+      /** @enum {string} */
+      change?: "replacement" | "creation" | "recreation";
+      note: string;
+    };
+    RelayOptimizeSharedRole: {
+      roles: string[];
+      kind: number;
+      note: string;
+    };
     DiscoveryEvidence: {
       metric: string;
       value: number;
@@ -5325,8 +7719,18 @@ export interface components {
       hashtags?: components["schemas"]["DiscoveryRankedItem"][];
       domains?: components["schemas"]["DiscoveryRankedItem"][];
       conversations?: components["schemas"]["DiscoveryRankedItem"][];
+      personalization?: components["schemas"]["Personalization"];
     } & {
       [key: string]: unknown;
+    };
+    Personalization: {
+      /** @description Canonical hex pubkey */
+      viewer: string;
+      /** @enum {string} */
+      source: "personalized" | "global_fallback";
+      follow_count: number;
+      follows_truncated: boolean;
+      cohort_weight: number;
     };
     DiscoveryHomeResponse: {
       /** @constant */
@@ -5350,6 +7754,7 @@ export interface components {
       } & {
         [key: string]: unknown;
       };
+      personalization?: components["schemas"]["Personalization"];
     } & {
       [key: string]: unknown;
     };
@@ -5372,6 +7777,8 @@ export interface components {
     };
   };
   parameters: {
+    /** @description Personalize this ranking for one account. Hex pubkey or npub. No authentication: follow lists are public. The list blends engagement from that account's follows with the global ranking (default cohort weight 0.85). Zero follows returns the global ranking with personalization.source global_fallback. A follow list above the cap keeps the most trusted follows and sets follows_truncated. Offset is capped at 500 when viewer is set. The response is Cache-Control private. An invalid value is 400. When personalized discovery is disabled, a valid viewer is ignored. */
+    Viewer: string;
     /** @description Restrict rankings to one language. Lowercase 2-8 letter code, "und", or "und-uncertain". Omit to rank every language. Responses echo `language` and include global `top_languages` for 24h, 7d, and 30d. Each window lists the 15 highest real language codes (`^[a-z]{2,3}$`) when that many are indexed, plus `und` and `und-uncertain` when those buckets have notes. The unmarked buckets do not count toward the 15. No parameter changes how many languages are returned. */
     DiscoveryLanguage: string;
   };

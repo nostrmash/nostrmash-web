@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import Link from "@/components/app-link";
 import { YourView } from "@/components/me/your-view";
 import { PageHero } from "@/components/explorer/page-hero";
 
@@ -18,6 +19,9 @@ export default function MePage() {
         subtitle="Paste an npub, or sign with a browser signer if you have one. Discover and the trending lists use that key."
       />
       <YourView />
+      <Link href="/relays/manager" className="nm-action-link inline-flex">
+        Open Relay Manager
+      </Link>
     </article>
   );
 }

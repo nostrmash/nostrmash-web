@@ -1,3 +1,4 @@
+import { managerFixture } from "./relay-manager-fixture.mjs";
 import http from "node:http";
 
 const port = Number(process.env.MOCK_API_PORT ?? 8080);
@@ -474,6 +475,9 @@ const server = http.createServer(async (req, res) => {
       error: { code: "dependency_unavailable", message: "Mock API forced down" },
     });
   }
+
+  const manager = await managerFixture(url, () => readBody(req));
+  if (manager) return json(res, 200, manager);
 
   if (path === "/api/v1/discovery/home") {
     const fixture = url.searchParams.get("fixture");
