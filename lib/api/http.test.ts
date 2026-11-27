@@ -64,6 +64,21 @@ describe("fetchApiJson timeouts", () => {
     expect(isApiTimeoutError(new Error("API 500: boom"))).toBe(false);
   });
 
+  it("rejects redirects on sensitive POSTs using a Workers-compatible request", async () => {
+    const body = JSON.stringify({ pubkey: "fixture" });
+    const fetchMock = vi.fn().mockResolvedValue(Response.redirect("https://other.example/", 307));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      fetchApiJson("/api/v1/relays/optimize", { sensitive: true, init: { method: "POST", body } })
+    ).rejects.toThrow("Sensitive API request received an unexpected redirect");
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
+      expect.stringMatching(/\/api\/v1\/relays\/optimize$/),
+      expect.objectContaining({ body, cache: "no-store", method: "POST", redirect: "manual" })
+    );
+    expect(captureApiError).not.toHaveBeenCalled();
+  });
+
   it("retries subrequests that hit a Cloudflare challenge and returns the clean response", async () => {
     const challenge = () =>
       new Response("<html>Just a moment...</html>", {
