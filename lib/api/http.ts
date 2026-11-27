@@ -303,7 +303,8 @@ export async function fetchApiJson<T>(
         ...toNextFetchConfig(cacheClass),
         ...options?.init,
         signal,
-        ...(options?.sensitive ? { cache: "no-store", redirect: "error" } : {}),
+        // workerd supports manual redirects. Reject them before using the response.
+        ...(options?.sensitive ? { cache: "no-store", redirect: "manual" } : {}),
         headers: {
           Accept: "application/json",
           "X-Request-Id": outboundRequestId,
@@ -340,6 +341,11 @@ export async function fetchApiJson<T>(
     }
     if (!options?.sensitive) reportUpstreamFailure(error, path, outboundRequestId);
     return tryServeLastKnownGood(error);
+  }
+
+  if (options?.sensitive && response.status >= 300 && response.status < 400) {
+    await response.body?.cancel();
+    throw new Error("Sensitive API request received an unexpected redirect");
   }
 
   if (!response.ok) {

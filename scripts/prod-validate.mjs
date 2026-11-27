@@ -8,6 +8,8 @@
  * 403/429 with backoff, and optionally attach `x-nostrmash-validate` when
  * PROD_VALIDATE_TOKEN is set (pair that with a WAF skip rule if flakes persist).
  */
+import { createHash } from "node:crypto";
+
 const baseUrl = (
   process.argv[2] ||
   process.env.PROD_VALIDATE_BASE_URL ||
@@ -114,6 +116,34 @@ await check("backend API reachable from datacenter clients", async () => {
   const contentType = response.headers.get("content-type") ?? "";
   if (!contentType.includes("application/json")) {
     throw new Error(`expected JSON, got ${contentType}`);
+  }
+});
+
+await check("Relay Manager POST on the deployed Worker", async () => {
+  const pubkey = "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
+  const created_at = Math.floor(Date.now() / 1000);
+  const kind = 10002;
+  const tags = [];
+  const content = "";
+  const id = createHash("sha256")
+    .update(JSON.stringify([0, pubkey, created_at, kind, tags, content]))
+    .digest("hex");
+  // An invalid signature exercises the POST without dialing any relay.
+  const response = await fetchWithRetry(`${baseUrl}/api/relay-manager/verify`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      event: { id, pubkey, created_at, kind, tags, content, sig: "0".repeat(128) },
+      relays: ["wss://relay.damus.io"],
+    }),
+  });
+  if (!response.ok) throw new Error(await describeFailure(response));
+  if (!/\bno-store\b/i.test(response.headers.get("cache-control") ?? "")) {
+    throw new Error("Relay verification response is missing no-store");
+  }
+  const result = await response.json();
+  if (result.signature_valid !== false || result.sample_verified !== false) {
+    throw new Error("Relay verification did not reject the invalid signature");
   }
 });
 
